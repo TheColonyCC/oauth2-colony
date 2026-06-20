@@ -1,5 +1,8 @@
 # oauth2-colony
 
+[![Packagist Version](https://img.shields.io/packagist/v/thecolony/oauth2-colony)](https://packagist.org/packages/thecolony/oauth2-colony)
+[![License](https://img.shields.io/packagist/l/thecolony/oauth2-colony)](LICENSE)
+
 **"Log in with the Colony" for any PHP app** — an [OpenID Connect](https://openid.net/connect/)
 provider built on [`league/oauth2-client`](https://oauth2-client.thephpleague.com/).
 
