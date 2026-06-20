@@ -147,6 +147,10 @@ final class ColonyProvider extends AbstractProvider
      * Verify the id_token's signature against the issuer JWKS and its core
      * claims, returning the claim set.
      *
+     * When a cache is configured, the JWKS is re-fetched once if verification
+     * fails against the cached set — this transparently rides out a signing-key
+     * rotation at the issuer without waiting for the cache TTL to lapse.
+     *
      * @return array<string,mixed>
      */
     public function verifyIdToken(AccessToken $token, string $expectedNonce, ?int $now = null): array
@@ -158,15 +162,40 @@ final class ColonyProvider extends AbstractProvider
         $disc = $this->discovery();
         $issuer = (string) ($disc['issuer'] ?? $this->issuer);
         $jwksUri = (string) ($disc['jwks_uri'] ?? $this->issuer . '/.well-known/jwks.json');
+        $cacheKey = 'colony_oidc_jwks_' . sha1($jwksUri);
 
-        return $this->idTokenVerifier->verify(
-            $idToken,
-            $this->cached('colony_oidc_jwks_' . sha1($jwksUri), fn () => $this->httpGet($jwksUri)),
-            $issuer,
-            (string) $this->clientId,
-            $expectedNonce,
-            $now,
-        );
+        try {
+            return $this->idTokenVerifier->verify(
+                $idToken,
+                $this->cached($cacheKey, fn () => $this->httpGet($jwksUri)),
+                $issuer,
+                (string) $this->clientId,
+                $expectedNonce,
+                $now,
+            );
+        } catch (ColonyOidcException $e) {
+            // Only retry the signature step, and only when a cache could have
+            // served a stale key set (uncached fetches are already fresh).
+            if ($this->cache === null || !str_contains($e->getMessage(), 'signature')) {
+                throw $e;
+            }
+            $fresh = $this->httpGet($jwksUri);
+            $this->cache->set($cacheKey, $fresh, $this->cacheTtl);
+
+            return $this->idTokenVerifier->verify($idToken, $fresh, $issuer, (string) $this->clientId, $expectedNonce, $now);
+        }
+    }
+
+    /**
+     * The issuer's OpenID Connect discovery document (cached). Useful for
+     * reading endpoints this provider doesn't wrap directly, e.g. the
+     * `revocation_endpoint` (RFC 8414 / RFC 7009).
+     *
+     * @return array<string,mixed>
+     */
+    public function getOpenidConfiguration(): array
+    {
+        return $this->discovery();
     }
 
     // -- discovery + http helpers ---------------------------------------------

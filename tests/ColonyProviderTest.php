@@ -121,6 +121,52 @@ final class ColonyProviderTest extends TestCase
     }
 
     #[Test]
+    public function verify_id_token_refetches_jwks_once_after_a_key_rotation(): void
+    {
+        $oldKit = new OidcTestKit();   // the cached (stale) key set
+        $newKit = new OidcTestKit();   // the issuer rotated to this key
+        $idToken = $newKit->idToken(OidcTestKit::claims());
+        $cache = new ArrayCache();
+        // Pre-seed the cache with the OLD jwks so the first verify misses.
+        $cache->set('colony_oidc_jwks_' . sha1('https://thecolony.cc/.well-known/jwks.json'), $oldKit->jwksJson());
+
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $newKit->jwksJson()), // the fresh re-fetch
+        ], ['cache' => $cache]);
+        $token = new AccessToken(['access_token' => 'at', 'id_token' => $idToken]);
+
+        $claims = $provider->verifyIdToken($token, 'nonce-xyz');
+        self::assertSame('colony-sub-123', $claims['sub']);
+    }
+
+    #[Test]
+    public function verify_id_token_does_not_refetch_jwks_on_a_non_signature_failure(): void
+    {
+        // Cache is configured, signature is valid, but the nonce is wrong: the
+        // failure must surface immediately without a (non-queued) JWKS re-fetch.
+        $kit = new OidcTestKit();
+        $cache = new ArrayCache();
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $kit->jwksJson()),
+        ], ['cache' => $cache]);
+        $token = new AccessToken(['access_token' => 'at', 'id_token' => $kit->idToken(OidcTestKit::claims())]);
+
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('nonce');
+        $provider->verifyIdToken($token, 'the-wrong-nonce');
+    }
+
+    #[Test]
+    public function get_openid_configuration_exposes_the_discovery_document(): void
+    {
+        $provider = $this->provider([$this->discoveryResponse()]);
+        $conf = $provider->getOpenidConfiguration();
+        self::assertSame('https://thecolony.cc/oauth/token', $conf['token_endpoint']);
+    }
+
+    #[Test]
     public function verify_id_token_requires_an_id_token(): void
     {
         $provider = $this->provider([$this->discoveryResponse()]);
