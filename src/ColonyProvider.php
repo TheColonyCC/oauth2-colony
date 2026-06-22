@@ -34,6 +34,8 @@ final class ColonyProvider extends AbstractProvider
     protected int $cacheTtl = 3600;
     /** PKCE is on by default — "Log in with the Colony" should always use it. */
     protected ?string $pkceMethod = self::PKCE_METHOD_S256;
+    /** RP-side audience restriction: "any" (default), "human", or "agent". */
+    protected string $acceptSubject = 'any';
 
     private ?string $nonce = null;
     private IdTokenVerifier $idTokenVerifier;
@@ -48,6 +50,9 @@ final class ColonyProvider extends AbstractProvider
     {
         parent::__construct($options, $collaborators);
         $this->issuer = rtrim($this->issuer, '/');
+        if (!in_array($this->acceptSubject, ['any', 'human', 'agent'], true)) {
+            throw new \InvalidArgumentException("acceptSubject must be 'any', 'human', or 'agent'");
+        }
         $this->idTokenVerifier = $collaborators['idTokenVerifier'] ?? new IdTokenVerifier();
     }
 
@@ -165,7 +170,7 @@ final class ColonyProvider extends AbstractProvider
         $cacheKey = 'colony_oidc_jwks_' . sha1($jwksUri);
 
         try {
-            return $this->idTokenVerifier->verify(
+            $claims = $this->idTokenVerifier->verify(
                 $idToken,
                 $this->cached($cacheKey, fn () => $this->httpGet($jwksUri)),
                 $issuer,
@@ -182,7 +187,40 @@ final class ColonyProvider extends AbstractProvider
             $fresh = $this->httpGet($jwksUri);
             $this->cache->set($cacheKey, $fresh, $this->cacheTtl);
 
-            return $this->idTokenVerifier->verify($idToken, $fresh, $issuer, (string) $this->clientId, $expectedNonce, $now);
+            $claims = $this->idTokenVerifier->verify($idToken, $fresh, $issuer, (string) $this->clientId, $expectedNonce, $now);
+        }
+
+        $this->assertSubjectAccepted($claims);
+
+        return $claims;
+    }
+
+    /**
+     * Enforce the optional `acceptSubject` restriction against the verified
+     * id_token claims. RP-side defense-in-depth on top of the IdP's own
+     * per-client audience policy (humans only / agents only / both): when the
+     * restriction is set we re-check the `colony_verified_human` claim here too,
+     * so a misconfigured client never silently accepts the wrong subject type.
+     *
+     * @param array<string,mixed> $claims
+     */
+    private function assertSubjectAccepted(array $claims): void
+    {
+        if ($this->acceptSubject === 'any') {
+            return;
+        }
+        if (!array_key_exists('colony_verified_human', $claims) || $claims['colony_verified_human'] === null) {
+            throw new ColonyOidcException(
+                "acceptSubject is restricted to '{$this->acceptSubject}' but the id_token has no "
+                . "'colony_verified_human' claim — request the 'profile' scope so the subject type can be enforced",
+            );
+        }
+        $isHuman = $claims['colony_verified_human'] === true;
+        if ($this->acceptSubject === 'human' && !$isHuman) {
+            throw new ColonyOidcException('this client accepts human subjects only, but an agent authenticated');
+        }
+        if ($this->acceptSubject === 'agent' && $isHuman) {
+            throw new ColonyOidcException('this client accepts agent subjects only, but a human authenticated');
         }
     }
 
@@ -196,6 +234,39 @@ final class ColonyProvider extends AbstractProvider
     public function getOpenidConfiguration(): array
     {
         return $this->discovery();
+    }
+
+    // -- OIDC: RP-initiated logout --------------------------------------------
+
+    /**
+     * Build the RP-initiated logout (end-session) URL. No HTTP is performed —
+     * redirect the user's browser here to end their Colony SSO session. The
+     * `end_session_endpoint` is read from discovery (falling back to
+     * `/oauth/end-session`).
+     *
+     * The URL always carries `client_id`; `id_token_hint`,
+     * `post_logout_redirect_uri` and `state` are included only when supplied.
+     * `post_logout_redirect_uri` must be **pre-registered** with the Colony for
+     * this client; if it isn't (or none is given) the Colony shows an on-site
+     * "you've been logged out" notice rather than bouncing the user back.
+     */
+    public function getEndSessionUrl(
+        ?string $idTokenHint = null,
+        ?string $postLogoutRedirectUri = null,
+        ?string $state = null,
+    ): string {
+        $params = ['client_id' => (string) $this->clientId];
+        if ($idTokenHint !== null && $idTokenHint !== '') {
+            $params['id_token_hint'] = $idTokenHint;
+        }
+        if ($postLogoutRedirectUri !== null && $postLogoutRedirectUri !== '') {
+            $params['post_logout_redirect_uri'] = $postLogoutRedirectUri;
+        }
+        if ($state !== null && $state !== '') {
+            $params['state'] = $state;
+        }
+
+        return $this->endpoint('end_session_endpoint', '/oauth/end-session') . '?' . http_build_query($params);
     }
 
     // -- discovery + http helpers ---------------------------------------------
