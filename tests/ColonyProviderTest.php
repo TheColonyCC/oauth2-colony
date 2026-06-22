@@ -288,4 +288,148 @@ final class ColonyProviderTest extends TestCase
         $provider2 = $this->provider([], ['cache' => $cache]);
         self::assertSame('https://thecolony.cc/oauth/token', $provider2->getBaseAccessTokenUrl([]));
     }
+
+    // -- humans vs agents: ColonyResourceOwner --------------------------------
+
+    #[Test]
+    public function resource_owner_reports_a_human_subject(): void
+    {
+        $owner = new ColonyResourceOwner(OidcTestKit::claims(['colony_verified_human' => true]));
+        self::assertTrue($owner->isHuman());
+        self::assertFalse($owner->isAgent());
+        self::assertTrue($owner->getVerifiedHuman());
+    }
+
+    #[Test]
+    public function resource_owner_reports_an_agent_subject(): void
+    {
+        $owner = new ColonyResourceOwner(OidcTestKit::claims(['colony_verified_human' => false]));
+        self::assertFalse($owner->isHuman());
+        self::assertTrue($owner->isAgent());
+        self::assertFalse($owner->getVerifiedHuman());
+    }
+
+    #[Test]
+    public function resource_owner_subject_is_unknown_when_the_claim_is_absent(): void
+    {
+        // colony_verified_human is only emitted with the profile scope.
+        $owner = new ColonyResourceOwner(OidcTestKit::claims());
+        self::assertNull($owner->getVerifiedHuman());
+        self::assertFalse($owner->isHuman());
+        self::assertFalse($owner->isAgent());
+    }
+
+    // -- acceptSubject (RP-side audience guard) -------------------------------
+
+    /**
+     * Run a full id_token verification with the given acceptSubject restriction
+     * and colony_verified_human claim override.
+     *
+     * @param array<string,mixed> $claimOverrides
+     * @return array<string,mixed>
+     */
+    private function verifyWithAcceptSubject(string $acceptSubject, array $claimOverrides): array
+    {
+        $kit = new OidcTestKit();
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $kit->jwksJson()),
+        ], ['acceptSubject' => $acceptSubject]);
+        $token = new AccessToken([
+            'access_token' => 'at',
+            'id_token' => $kit->idToken(OidcTestKit::claims($claimOverrides)),
+        ]);
+
+        return $provider->verifyIdToken($token, 'nonce-xyz');
+    }
+
+    #[Test]
+    public function accept_subject_rejects_an_unknown_value_at_construction(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->provider([], ['acceptSubject' => 'robot']);
+    }
+
+    #[Test]
+    public function accept_subject_human_rejects_an_agent(): void
+    {
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('human subjects only');
+        $this->verifyWithAcceptSubject('human', ['colony_verified_human' => false]);
+    }
+
+    #[Test]
+    public function accept_subject_agent_rejects_a_human(): void
+    {
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('agent subjects only');
+        $this->verifyWithAcceptSubject('agent', ['colony_verified_human' => true]);
+    }
+
+    #[Test]
+    public function accept_subject_human_allows_a_human(): void
+    {
+        $claims = $this->verifyWithAcceptSubject('human', ['colony_verified_human' => true]);
+        self::assertTrue($claims['colony_verified_human']);
+    }
+
+    #[Test]
+    public function accept_subject_agent_allows_an_agent(): void
+    {
+        $claims = $this->verifyWithAcceptSubject('agent', ['colony_verified_human' => false]);
+        self::assertFalse($claims['colony_verified_human']);
+    }
+
+    #[Test]
+    public function accept_subject_restrictive_without_the_claim_raises(): void
+    {
+        // profile scope not requested -> no colony_verified_human -> never silently allow
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('profile');
+        $this->verifyWithAcceptSubject('human', []);
+    }
+
+    #[Test]
+    public function accept_subject_any_never_raises_on_subject_type(): void
+    {
+        $claims = $this->verifyWithAcceptSubject('any', ['colony_verified_human' => false]);
+        self::assertSame('colony-sub-123', $claims['sub']);
+        // and with the claim absent entirely
+        $claims2 = $this->verifyWithAcceptSubject('any', []);
+        self::assertArrayNotHasKey('colony_verified_human', $claims2);
+    }
+
+    // -- RP-initiated logout: getEndSessionUrl --------------------------------
+
+    #[Test]
+    public function end_session_url_reads_discovery_and_carries_supplied_params(): void
+    {
+        $disc = array_merge(self::DISCOVERY, ['end_session_endpoint' => 'https://thecolony.cc/oauth/end-session']);
+        $provider = $this->provider([
+            new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($disc)),
+        ]);
+        $url = $provider->getEndSessionUrl(
+            idTokenHint: 'idt.123',
+            postLogoutRedirectUri: 'https://app.example/bye?a=b',
+            state: 'xyz',
+        );
+        self::assertStringStartsWith('https://thecolony.cc/oauth/end-session?', $url);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        self::assertSame('colony_client_abc', $q['client_id']);
+        self::assertSame('idt.123', $q['id_token_hint']);
+        self::assertSame('https://app.example/bye?a=b', $q['post_logout_redirect_uri']);
+        self::assertSame('xyz', $q['state']);
+    }
+
+    #[Test]
+    public function end_session_url_omits_unset_params_and_falls_back_without_http(): void
+    {
+        // No queued responses: discovery is unreachable, endpoint() falls back —
+        // and getEndSessionUrl must still produce a usable URL with only client_id.
+        $provider = $this->provider([]);
+        $url = $provider->getEndSessionUrl();
+        self::assertStringStartsWith('https://thecolony.cc/oauth/end-session?', $url);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        self::assertSame(['client_id' => 'colony_client_abc'], $q);
+    }
 }

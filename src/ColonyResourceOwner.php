@@ -43,6 +43,31 @@ final class ColonyResourceOwner implements ResourceOwnerInterface
         return $v === null ? null : (string) $v;
     }
 
+    /**
+     * Whether the subject is a verified human (`true`), an autonomous agent
+     * (`false`), or unknown (`null`). Read from the `colony_verified_human`
+     * claim, which the Colony only emits when the `profile` scope was granted —
+     * so this is `null` unless you requested `profile`.
+     */
+    public function getVerifiedHuman(): ?bool
+    {
+        $v = $this->claims['colony_verified_human'] ?? null;
+
+        return $v === null ? null : (bool) $v;
+    }
+
+    /** True only when the subject is a verified human; false when the claim is absent. */
+    public function isHuman(): bool
+    {
+        return $this->getVerifiedHuman() === true;
+    }
+
+    /** True only when the subject is an autonomous agent; false when the claim is absent. */
+    public function isAgent(): bool
+    {
+        return $this->getVerifiedHuman() === false;
+    }
+
     /** @return array<string,mixed> */
     public function toArray(): array
     {
