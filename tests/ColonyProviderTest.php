@@ -13,6 +13,9 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use TheColony\OAuth2\ColonyProvider;
 use TheColony\OAuth2\ColonyResourceOwner;
+use TheColony\OAuth2\IdTokenVerifier;
+use TheColony\OAuth2\Exception\ColonyConsentRequiredException;
+use TheColony\OAuth2\Exception\ColonyLoginRequiredException;
 use TheColony\OAuth2\Exception\ColonyOidcException;
 
 final class ColonyProviderTest extends TestCase
@@ -431,5 +434,179 @@ final class ColonyProviderTest extends TestCase
         self::assertStringStartsWith('https://thecolony.cc/oauth/end-session?', $url);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
         self::assertSame(['client_id' => 'colony_client_abc'], $q);
+    }
+
+    // -- back-channel logout: validateLogoutToken ----------------------------
+
+    private const BCL = IdTokenVerifier::BACKCHANNEL_LOGOUT_EVENT;
+
+    /** @param array<string,mixed> $over @return array<string,mixed> */
+    private function logoutClaims(array $over = []): array
+    {
+        return array_merge([
+            'iss' => 'https://thecolony.cc', 'aud' => 'colony_client_abc',
+            'iat' => time(), 'exp' => time() + 120, 'jti' => 'logout-jti-1',
+            'sub' => 'agent_123', 'sid' => 'sess_42',
+            'events' => [self::BCL => []],
+        ], $over);
+    }
+
+    #[Test]
+    public function validate_logout_token_valid_returns_sub_and_sid(): void
+    {
+        $kit = new OidcTestKit();
+        $provider = $this->provider([$this->discoveryResponse(), new Response(200, [], $kit->jwksJson())]);
+        $claims = $provider->validateLogoutToken($kit->idToken($this->logoutClaims()));
+        self::assertSame('agent_123', $claims['sub']);
+        self::assertSame('sess_42', $claims['sid']);
+        self::assertArrayHasKey(self::BCL, $claims['events']);
+    }
+
+    #[Test]
+    public function validate_logout_token_sub_only_and_sid_only(): void
+    {
+        $kit = new OidcTestKit();
+        $p = $this->provider([$this->discoveryResponse(), new Response(200, [], $kit->jwksJson())]);
+        $c = $this->logoutClaims(); unset($c['sid']);
+        self::assertSame('agent_123', $p->validateLogoutToken($kit->idToken($c))['sub']);
+        $p2 = $this->provider([$this->discoveryResponse(), new Response(200, [], $kit->jwksJson())]);
+        $c2 = $this->logoutClaims(); unset($c2['sub']);
+        self::assertSame('sess_42', $p2->validateLogoutToken($kit->idToken($c2))['sid']);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('invalidLogoutTokens')]
+    #[Test]
+    public function validate_logout_token_rejects(callable $mutate): void
+    {
+        $kit = new OidcTestKit();
+        $provider = $this->provider([$this->discoveryResponse(), new Response(200, [], $kit->jwksJson())]);
+        $claims = $this->logoutClaims();
+        $token = $mutate($kit, $claims);
+        $this->expectException(ColonyOidcException::class);
+        $provider->validateLogoutToken($token);
+    }
+
+    /** @return array<string,array{0:callable}> */
+    public static function invalidLogoutTokens(): array
+    {
+        return [
+            'wrong issuer' => [fn ($k, $c) => $k->idToken(['iss' => 'https://evil.example'] + $c)],
+            'wrong audience' => [fn ($k, $c) => $k->idToken(['aud' => 'someone_else'] + $c)],
+            'missing iat' => [function ($k, $c) { unset($c['iat']); return $k->idToken($c); }],
+            'expired' => [fn ($k, $c) => $k->idToken(['exp' => time() - 3600] + $c)],
+            'nonce present' => [fn ($k, $c) => $k->idToken(['nonce' => 'N'] + $c)],
+            'neither sub nor sid' => [function ($k, $c) { unset($c['sub'], $c['sid']); return $k->idToken($c); }],
+            'missing events' => [function ($k, $c) { unset($c['events']); return $k->idToken($c); }],
+            'events not object' => [fn ($k, $c) => $k->idToken(['events' => 'nope'] + $c)],
+            'wrong event member' => [fn ($k, $c) => $k->idToken(['events' => ['http://x/other' => []]] + $c)],
+            'bad signature' => [fn ($k, $c) => (new OidcTestKit())->idToken($c)],
+        ];
+    }
+
+    #[Test]
+    public function validate_logout_token_verifies_against_multikey_jwks(): void
+    {
+        $k1 = new OidcTestKit();
+        $k2 = new OidcTestKit();   // the token will be signed by k2
+        $jwks = (string) json_encode(['keys' => [
+            json_decode($k1->jwksJson(), true)['keys'][0],
+            json_decode($k2->jwksJson(), true)['keys'][0],
+        ]]);
+        $provider = $this->provider([$this->discoveryResponse(), new Response(200, [], $jwks)]);
+        $claims = $provider->validateLogoutToken($k2->idToken($this->logoutClaims()));
+        self::assertSame('agent_123', $claims['sub']);
+    }
+
+    #[Test]
+    public function verify_id_token_verifies_against_multikey_jwks(): void
+    {
+        $k1 = new OidcTestKit();
+        $k2 = new OidcTestKit();
+        $jwks = (string) json_encode(['keys' => [
+            json_decode($k1->jwksJson(), true)['keys'][0],
+            json_decode($k2->jwksJson(), true)['keys'][0],
+        ]]);
+        $provider = $this->provider([$this->discoveryResponse(), new Response(200, [], $jwks)]);
+        $token = new AccessToken(['access_token' => 'at', 'id_token' => $k2->idToken(OidcTestKit::claims())]);
+        self::assertSame('colony-sub-123', $provider->verifyIdToken($token, 'nonce-xyz')['sub']);
+    }
+
+    // -- silent SSO ----------------------------------------------------------
+
+    #[Test]
+    public function silent_authorization_url_sets_prompt_none(): void
+    {
+        $provider = $this->provider([$this->discoveryResponse()]);
+        $url = $provider->getSilentAuthorizationUrl(['scope' => 'openid profile']);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        self::assertSame('none', $q['prompt']);
+        self::assertSame('openid profile', $q['scope']);
+    }
+
+    #[Test]
+    public function silent_authorization_url_overrides_passed_prompt(): void
+    {
+        $provider = $this->provider([$this->discoveryResponse()]);
+        $url = $provider->getSilentAuthorizationUrl(['prompt' => 'login']);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        self::assertSame('none', $q['prompt']);
+    }
+
+    #[Test]
+    public function raise_for_callback_error_login_required(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyLoginRequiredException::class);
+        $provider->raiseForCallbackError(['error' => 'login_required']);
+    }
+
+    #[Test]
+    public function raise_for_callback_error_consent_required(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyConsentRequiredException::class);
+        $provider->raiseForCallbackError(['error' => 'consent_required', 'error_description' => 'needs consent']);
+    }
+
+    #[Test]
+    public function raise_for_callback_error_generic_is_base_exception(): void
+    {
+        $provider = $this->provider([]);
+        try {
+            $provider->raiseForCallbackError(['error' => 'interaction_required']);
+            self::fail('expected an exception');
+        } catch (ColonyOidcException $e) {
+            self::assertNotInstanceOf(ColonyLoginRequiredException::class, $e);
+            self::assertNotInstanceOf(ColonyConsentRequiredException::class, $e);
+        }
+    }
+
+    #[Test]
+    public function raise_for_callback_error_noop_on_clean_code(): void
+    {
+        $provider = $this->provider([]);
+        $provider->raiseForCallbackError(['code' => 'abc', 'state' => 'xyz']);
+        self::assertTrue(true);   // no exception thrown
+    }
+
+    // -- granular consent: grantedScopes -------------------------------------
+
+    #[Test]
+    public function granted_scopes_parsed_from_token_response(): void
+    {
+        $provider = $this->provider([]);
+        $token = new AccessToken(['access_token' => 'at', 'scope' => 'openid profile']);
+        self::assertSame(['openid', 'profile'], $provider->grantedScopes($token));
+    }
+
+    #[Test]
+    public function granted_scopes_falls_back_to_requested_when_omitted(): void
+    {
+        // RFC 6749 §5.1: server MAY omit scope when it equals the request.
+        $provider = $this->provider([]);
+        $token = new AccessToken(['access_token' => 'at']);   // no scope key
+        self::assertSame(['openid', 'profile', 'email'],
+            $provider->grantedScopes($token, 'openid profile email'));
+        self::assertSame([], $provider->grantedScopes($token));   // no fallback -> empty
     }
 }

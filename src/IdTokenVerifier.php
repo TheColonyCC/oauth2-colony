@@ -21,6 +21,9 @@ final class IdTokenVerifier
 {
     private const LEEWAY_SECONDS = 60;
 
+    /** OIDC Back-Channel Logout 1.0 event identifier (§2.4). */
+    public const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
+
     private JWSVerifier $verifier;
     private CompactSerializer $serializer;
 
@@ -82,6 +85,79 @@ final class IdTokenVerifier
         }
         if (!isset($claims['sub']) || $claims['sub'] === '') {
             throw new ColonyOidcException('id_token missing sub');
+        }
+
+        return $claims;
+    }
+
+    /**
+     * Verify a back-channel `logout_token` (OIDC Back-Channel Logout 1.0 §2.4/§2.6).
+     *
+     * Different rules from an id_token: `iat` is required, `exp` is optional (checked
+     * when present), a `nonce` MUST be absent, there must be a `sub` and/or `sid`, and an
+     * `events` object must carry the back-channel-logout member.
+     *
+     * @param string $jwksJson Raw JWKS document (the issuer's signing keys).
+     * @return array<string,mixed> the validated claim set
+     */
+    public function verifyLogoutToken(
+        string $logoutToken,
+        string $jwksJson,
+        string $issuer,
+        string $clientId,
+        ?int $now = null,
+    ): array {
+        $now ??= time();
+
+        try {
+            $jws = $this->serializer->unserialize($logoutToken);
+        } catch (\Throwable $e) {
+            throw new ColonyOidcException('unparseable logout_token', 0, $e);
+        }
+
+        $header = $jws->getSignature(0)->getProtectedHeader();
+        if (($header['alg'] ?? null) !== 'RS256') {
+            throw new ColonyOidcException('unsupported logout_token alg (expected RS256)');
+        }
+
+        if (!$this->verifier->verifyWithKeySet($jws, $this->keySet($jwksJson), 0)) {
+            throw new ColonyOidcException('logout_token signature does not verify');
+        }
+
+        /** @var array<string,mixed> $claims */
+        $claims = json_decode((string) $jws->getPayload(), true);
+        if (!is_array($claims)) {
+            throw new ColonyOidcException('logout_token payload is not a JSON object');
+        }
+
+        if (($claims['iss'] ?? null) !== $issuer) {
+            throw new ColonyOidcException('logout_token issuer mismatch');
+        }
+        $aud = $claims['aud'] ?? null;
+        $audOk = is_array($aud) ? in_array($clientId, $aud, true) : $aud === $clientId;
+        if (!$audOk) {
+            throw new ColonyOidcException('logout_token audience mismatch');
+        }
+        if (!isset($claims['iat'])) {
+            throw new ColonyOidcException('logout_token missing iat');
+        }
+        if (isset($claims['exp']) && $now > ((int) $claims['exp'] + self::LEEWAY_SECONDS)) {
+            throw new ColonyOidcException('logout_token expired');
+        }
+        // §2.4: a logout token MUST NOT contain a nonce (that would be an id_token).
+        if (array_key_exists('nonce', $claims)) {
+            throw new ColonyOidcException('logout_token must not contain a nonce');
+        }
+        // §2.4: MUST identify the subject/session to log out via sub and/or sid.
+        $hasSub = isset($claims['sub']) && $claims['sub'] !== '';
+        $hasSid = isset($claims['sid']) && $claims['sid'] !== '';
+        if (!$hasSub && !$hasSid) {
+            throw new ColonyOidcException('logout_token must contain a sub and/or sid');
+        }
+        // §2.4: the events claim asserts this is a back-channel logout event.
+        $events = $claims['events'] ?? null;
+        if (!is_array($events) || !array_key_exists(self::BACKCHANNEL_LOGOUT_EVENT, $events)) {
+            throw new ColonyOidcException('logout_token events is missing the back-channel-logout member');
         }
 
         return $claims;

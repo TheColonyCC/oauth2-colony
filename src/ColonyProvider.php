@@ -9,6 +9,8 @@ use League\OAuth2\Client\Provider\Exception\IdentityProviderException;
 use League\OAuth2\Client\Token\AccessToken;
 use Psr\Http\Message\ResponseInterface;
 use Psr\SimpleCache\CacheInterface;
+use TheColony\OAuth2\Exception\ColonyConsentRequiredException;
+use TheColony\OAuth2\Exception\ColonyLoginRequiredException;
 use TheColony\OAuth2\Exception\ColonyOidcException;
 
 /**
@@ -123,6 +125,24 @@ final class ColonyProvider extends AbstractProvider
     }
 
     /**
+     * Build a **silent SSO** authorization URL (`prompt=none`): the IdP shows no UI.
+     *
+     * Use it (typically in a hidden iframe) to re-authenticate a user who already has a
+     * Colony session without an interactive redirect. The callback then yields one of three
+     * outcomes — `?code=...` on success, or `?error=login_required` / `?error=consent_required`
+     * on failure — which {@see raiseForCallbackError()} turns into typed exceptions. Accepts
+     * the same `$options` as `getAuthorizationUrl()`; any `prompt` you pass is forced to `none`.
+     *
+     * @param array<string,mixed> $options
+     */
+    public function getSilentAuthorizationUrl(array $options = []): string
+    {
+        $options['prompt'] = 'none';
+
+        return $this->getAuthorizationUrl($options);
+    }
+
+    /**
      * Set the PKCE method (defaults to S256). Pass null to disable PKCE.
      * Provided for parity with newer league/oauth2-client releases that ship a
      * setter; this works on the 2.7+ baseline too.
@@ -193,6 +213,95 @@ final class ColonyProvider extends AbstractProvider
         $this->assertSubjectAccepted($claims);
 
         return $claims;
+    }
+
+    /**
+     * Validate a back-channel `logout_token` (OIDC Back-Channel Logout 1.0).
+     *
+     * Call this from your registered back-channel logout endpoint with the `logout_token`
+     * the Colony POSTs there. Returns the validated claims (carrying a `sub` and/or `sid`)
+     * so you can terminate that subject's / session's local session; throws
+     * {@see ColonyOidcException} on any failure. Verification (signature against the live
+     * JWKS, with the same single rotation refetch as {@see verifyIdToken}; `iss` / `aud`;
+     * required `iat`; `exp` when present; required `events` member; `sub`/`sid`; no `nonce`)
+     * is delegated to {@see IdTokenVerifier::verifyLogoutToken()}.
+     *
+     * @return array<string,mixed>
+     */
+    public function validateLogoutToken(string $logoutToken, ?int $now = null): array
+    {
+        $disc = $this->discovery();
+        $issuer = (string) ($disc['issuer'] ?? $this->issuer);
+        $jwksUri = (string) ($disc['jwks_uri'] ?? $this->issuer . '/.well-known/jwks.json');
+        $cacheKey = 'colony_oidc_jwks_' . sha1($jwksUri);
+
+        try {
+            return $this->idTokenVerifier->verifyLogoutToken(
+                $logoutToken,
+                $this->cached($cacheKey, fn () => $this->httpGet($jwksUri)),
+                $issuer,
+                (string) $this->clientId,
+                $now,
+            );
+        } catch (ColonyOidcException $e) {
+            if ($this->cache === null || !str_contains($e->getMessage(), 'signature')) {
+                throw $e;
+            }
+            $fresh = $this->httpGet($jwksUri);
+            $this->cache->set($cacheKey, $fresh, $this->cacheTtl);
+
+            return $this->idTokenVerifier->verifyLogoutToken($logoutToken, $fresh, $issuer, (string) $this->clientId, $now);
+        }
+    }
+
+    /**
+     * The scopes the user actually granted, parsed from the token response's `scope`.
+     *
+     * Under **granular consent** a user may decline optional scopes, so the requested
+     * scope is a *ceiling*. Note OAuth 2.0 (RFC 6749 §5.1) lets the server **omit** `scope`
+     * when it equals what was requested — so an empty result means "not reported, assume
+     * the requested set", *not* "nothing granted". Pass the scope you requested as
+     * `$requested` to get that fallback resolved for you.
+     *
+     * @param string|null $requested the scope string you requested (for the omitted-scope fallback)
+     * @return list<string>
+     */
+    public function grantedScopes(AccessToken $token, ?string $requested = null): array
+    {
+        $scope = $token->getValues()['scope'] ?? null;
+        if (!is_string($scope) || trim($scope) === '') {
+            $scope = $requested ?? '';
+        }
+
+        return array_values(array_filter(preg_split('/\s+/', trim((string) $scope)) ?: []));
+    }
+
+    /**
+     * Inspect the callback query params and raise on any OAuth `error`.
+     *
+     * Call this **first** on the callback, before exchanging the code. For the silent-SSO
+     * (`prompt=none`) outcomes it raises the typed
+     * {@see \TheColony\OAuth2\Exception\ColonyLoginRequiredException} /
+     * {@see \TheColony\OAuth2\Exception\ColonyConsentRequiredException}; any other `error`
+     * raises a generic {@see ColonyOidcException}. Returns cleanly when there is no `error`.
+     *
+     * @param array<string,mixed> $params
+     */
+    public function raiseForCallbackError(array $params): void
+    {
+        $error = $params['error'] ?? null;
+        if (!is_string($error) || $error === '') {
+            return;
+        }
+        $description = (string) ($params['error_description'] ?? '');
+        $detail = $description !== '' ? "{$error}: {$description}" : $error;
+        if ($error === 'login_required') {
+            throw new ColonyLoginRequiredException($detail);
+        }
+        if ($error === 'consent_required') {
+            throw new ColonyConsentRequiredException($detail);
+        }
+        throw new ColonyOidcException("authorization error: {$detail}");
     }
 
     /**
