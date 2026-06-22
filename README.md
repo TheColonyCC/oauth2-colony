@@ -153,6 +153,74 @@ $token = $provider->getAccessToken('refresh_token', ['refresh_token' => $token->
 The Colony **rotates** refresh tokens on each use — persist the new
 `$token->getRefreshToken()` every time; the one you just spent is rejected if replayed.
 
+## Back-channel logout
+
+When a user signs out at the Colony (or their session is revoked), the IdP **POSTs a
+signed `logout_token`** to each app's registered back-channel logout endpoint, so you can
+end the local session server-side even if the user never returns. Validate it there:
+
+```php
+// POST /auth/colony/backchannel-logout
+try {
+    $claims = $provider->validateLogoutToken($_POST['logout_token']);
+} catch (ColonyOidcException $e) {
+    http_response_code(400); exit;            // invalid token — log no one out
+}
+kill_sessions(sub: $claims['sub'] ?? null, sid: $claims['sid'] ?? null);
+http_response_code(200);                       // ack delivery
+```
+
+`validateLogoutToken()` enforces OIDC Back-Channel Logout 1.0 (§2.4/§2.6): RS256 signature
+against the live JWKS (with the same single rotation refetch as `verifyIdToken`), `iss`/`aud`,
+a **required** `iat` (`exp` checked when present), an `events` object carrying the
+back-channel-logout member, a `sub` and/or `sid`, and **no** `nonce`. It returns the claims;
+it throws `ColonyOidcException` on any failure. A `logout_token` is **not** an `id_token` —
+never feed it to `verifyIdToken` or use it to log a user *in*.
+
+## Silent SSO (`prompt=none`)
+
+To check for an existing Colony session **without** showing UI (e.g. a hidden iframe on page
+load), use `getSilentAuthorizationUrl()`. The callback has **three** outcomes — call
+`raiseForCallbackError()` first to turn the silent failures into typed exceptions:
+
+```php
+$url = $provider->getSilentAuthorizationUrl(['scope' => 'openid profile']);  // forces prompt=none
+
+// on the callback:
+try {
+    $provider->raiseForCallbackError($_GET);                 // throws on ?error=...
+    $token = $provider->getAccessToken('authorization_code', ['code' => $_GET['code']]);
+    $claims = $provider->verifyIdToken($token, $_SESSION['oauth2nonce']);   // signed in silently
+} catch (ColonyLoginRequiredException $e) {
+    // ?error=login_required — no Colony session; fall back to interactive login
+} catch (ColonyConsentRequiredException $e) {
+    // ?error=consent_required — needs consent; fall back to interactive login
+}
+```
+
+`raiseForCallbackError()` is a no-op when there's no `error`, raises the two typed exceptions
+for `login_required` / `consent_required`, and a generic `ColonyOidcException` otherwise.
+
+## Granular consent
+
+Users can decline optional scopes, so the scope you request is a **ceiling**. Read what was
+actually granted with `grantedScopes($token)`:
+
+```php
+$granted = $provider->grantedScopes($token, $requestedScope);
+// e.g. ['openid','profile']  — the user declined 'email'
+```
+
+Per OAuth 2.0 (RFC 6749 §5.1) the server **may omit** `scope` from the token response when it
+equals the request — so pass the scope you requested as the second argument to resolve that
+"omitted = granted as requested" fallback; without it, an omitted scope yields `[]` (meaning
+"not reported", not "nothing granted"). When in doubt, also check the claims actually present.
+
+> **`sub` may be pairwise.** Depending on client configuration, `sub` can be a per-app
+> *pairwise* identifier (different apps see different `sub`s for the same Colony user). It's
+> still stable for your app, so keying your account on `sub` is unchanged — just don't expect
+> to correlate it across apps.
+
 ## Development
 
 ```bash
