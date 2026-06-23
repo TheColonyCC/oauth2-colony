@@ -668,13 +668,15 @@ final class ColonyProviderTest extends TestCase
     }
 
     #[Test]
-    public function client_secret_post_requires_a_client_secret(): void
+    public function client_secret_post_constructs_without_a_secret_for_dormant_use(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('clientSecret is required');
-        // providerWithHistory omits the secret; default method needs one.
-        $h = [];
-        $this->providerWithHistory([], $h);
+        // A dormant/unconfigured client_secret_post provider (empty secret) must construct
+        // fine — league's default, and what the colony-login-bundle lazy service + dormant
+        // "button hidden / routes 404 until env set" pattern relies on. It only fails if an
+        // actual token request is attempted without a secret.
+        $h = [];   // providerWithHistory omits the default secret
+        $provider = $this->providerWithHistory([$this->discoveryResponse()], $h);
+        self::assertSame('https://thecolony.cc/oauth/authorize', $provider->getBaseAuthorizationUrl());
     }
 
     #[Test]
