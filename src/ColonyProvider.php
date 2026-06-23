@@ -105,11 +105,11 @@ final class ColonyProvider extends AbstractProvider
                     'signingAlg must be one of: ' . implode(', ', self::CLIENT_ASSERTION_ALGS),
                 );
             }
-        } elseif (empty($this->clientSecret)) {
-            throw new \InvalidArgumentException(
-                "clientSecret is required for tokenEndpointAuthMethod='client_secret_post'",
-            );
         }
+        // Note: client_secret_post is NOT required to have a secret at construction.
+        // The provider is commonly a long-lived DI service (e.g. via colony-login-bundle)
+        // that's instantiated while the login is still dormant/unconfigured; like league's
+        // default it constructs fine and only an actual token request needs the secret.
         $this->idTokenVerifier = $collaborators['idTokenVerifier'] ?? new IdTokenVerifier();
     }
 
