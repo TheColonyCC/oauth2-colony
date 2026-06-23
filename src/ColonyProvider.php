@@ -4,9 +4,15 @@ declare(strict_types=1);
 
 namespace TheColony\OAuth2;
 
+use Jose\Component\Core\AlgorithmManager;
+use Jose\Component\Core\JWK;
+use Jose\Component\KeyManagement\JWKFactory;
+use Jose\Component\Signature\JWSBuilder;
+use Jose\Component\Signature\Serializer\CompactSerializer;
 use League\OAuth2\Client\Provider\AbstractProvider;
 use League\OAuth2\Client\Provider\Exception\IdentityProviderException;
 use League\OAuth2\Client\Token\AccessToken;
+use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\SimpleCache\CacheInterface;
 use TheColony\OAuth2\Exception\ColonyConsentRequiredException;
@@ -27,6 +33,13 @@ use TheColony\OAuth2\Exception\ColonyOidcException;
  * clientSecret / redirectUri): `issuer` (Colony base URL, default
  * https://thecolony.cc), `scope` (space-delimited, default "openid profile
  * email"), and optional `cache` (PSR-16) + `cacheTtl` for discovery/JWKS.
+ *
+ * Partner-auth options: `tokenEndpointAuthMethod` — `client_secret_post`
+ * (default) or `private_key_jwt` (RFC 7523); for the latter pass `privateKey`
+ * (a PEM string, a PEM file path, or a web-token JWK), an optional
+ * `privateKeyId` (`kid`), and `signingAlg` (RS/PS/ES 256/384/512, default
+ * RS256). `usePar` turns on Pushed Authorization Requests (RFC 9126) for every
+ * authorization URL (or pass `['use_par' => true]` per call).
  */
 final class ColonyProvider extends AbstractProvider
 {
@@ -38,6 +51,27 @@ final class ColonyProvider extends AbstractProvider
     protected ?string $pkceMethod = self::PKCE_METHOD_S256;
     /** RP-side audience restriction: "any" (default), "human", or "agent". */
     protected string $acceptSubject = 'any';
+    /** Token/PAR-endpoint client auth: 'client_secret_post' (default) or 'private_key_jwt'. */
+    protected string $tokenEndpointAuthMethod = 'client_secret_post';
+    /** For private_key_jwt: a PEM string, a path to a PEM file, or a web-token JWK. */
+    protected mixed $privateKey = null;
+    /** For private_key_jwt: optional `kid` header (omit for a single key). */
+    protected ?string $privateKeyId = null;
+    /** For private_key_jwt: the assertion signing algorithm (RS/PS/ES 256/384/512). */
+    protected string $signingAlg = 'RS256';
+    /** Push the authorization request server-side (RFC 9126) for every authorization URL. */
+    protected bool $usePar = false;
+
+    /** Client auth methods this provider implements at the token / PAR endpoints. */
+    private const TOKEN_AUTH_METHODS = ['client_secret_post', 'private_key_jwt'];
+    /** RFC 7521 §4.2 client-assertion type for private_key_jwt. */
+    private const CLIENT_ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
+    /** Asymmetric algorithms the Colony's token/PAR verifier accepts (RFC 7523). */
+    private const CLIENT_ASSERTION_ALGS = [
+        'RS256', 'RS384', 'RS512', 'PS256', 'PS384', 'PS512', 'ES256', 'ES384', 'ES512',
+    ];
+    /** Each assertion is single-use + short-lived; the IdP caps the accepted lifetime at 5 min. */
+    private const ASSERTION_LIFETIME = 60;
 
     private ?string $nonce = null;
     private IdTokenVerifier $idTokenVerifier;
@@ -54,6 +88,27 @@ final class ColonyProvider extends AbstractProvider
         $this->issuer = rtrim($this->issuer, '/');
         if (!in_array($this->acceptSubject, ['any', 'human', 'agent'], true)) {
             throw new \InvalidArgumentException("acceptSubject must be 'any', 'human', or 'agent'");
+        }
+        if (!in_array($this->tokenEndpointAuthMethod, self::TOKEN_AUTH_METHODS, true)) {
+            throw new \InvalidArgumentException(
+                'tokenEndpointAuthMethod must be one of: ' . implode(', ', self::TOKEN_AUTH_METHODS),
+            );
+        }
+        if ($this->tokenEndpointAuthMethod === 'private_key_jwt') {
+            if (empty($this->privateKey)) {
+                throw new \InvalidArgumentException(
+                    "privateKey is required for tokenEndpointAuthMethod='private_key_jwt'",
+                );
+            }
+            if (!in_array($this->signingAlg, self::CLIENT_ASSERTION_ALGS, true)) {
+                throw new \InvalidArgumentException(
+                    'signingAlg must be one of: ' . implode(', ', self::CLIENT_ASSERTION_ALGS),
+                );
+            }
+        } elseif (empty($this->clientSecret)) {
+            throw new \InvalidArgumentException(
+                "clientSecret is required for tokenEndpointAuthMethod='client_secret_post'",
+            );
         }
         $this->idTokenVerifier = $collaborators['idTokenVerifier'] ?? new IdTokenVerifier();
     }
@@ -376,6 +431,165 @@ final class ColonyProvider extends AbstractProvider
         }
 
         return $this->endpoint('end_session_endpoint', '/oauth/end-session') . '?' . http_build_query($params);
+    }
+
+    // -- client authentication (private_key_jwt) + PAR ------------------------
+
+    /**
+     * Apply the configured client authentication to every token / refresh request
+     * (league routes both through here). For `private_key_jwt` the shared secret is
+     * replaced by a signed assertion; for `client_secret_post` league's body auth is
+     * kept. Overriding this one method covers `getAccessToken('authorization_code')`
+     * and `getAccessToken('refresh_token')` alike.
+     *
+     * @param array<string,mixed> $params
+     */
+    protected function getAccessTokenRequest(array $params): RequestInterface
+    {
+        return parent::getAccessTokenRequest($this->applyClientAuth($params));
+    }
+
+    /**
+     * Build the authorization URL. With **PAR** (RFC 9126) enabled — the `usePar`
+     * option, or `['use_par' => true]` here — the parameters are pushed to the IdP's
+     * PAR endpoint over a back channel first, and the browser receives only
+     * `client_id` + the issued one-time `request_uri`. The `state` / `nonce` / PKCE
+     * code you persist are unchanged (read them via {@see getState()} /
+     * {@see getNonce()} / {@see getPkceCode()}), and the push uses the same client
+     * auth as the token endpoint, so PAR composes with `private_key_jwt`. Without PAR
+     * this is league's standard authorization URL.
+     *
+     * @param array<string,mixed> $options
+     */
+    public function getAuthorizationUrl(array $options = []): string
+    {
+        $usePar = (bool) ($options['use_par'] ?? $this->usePar);
+        unset($options['use_par']);
+        if (!$usePar) {
+            return parent::getAuthorizationUrl($options);
+        }
+        // Mints + stashes state, nonce and the PKCE verifier, exactly as the normal path.
+        $params = $this->getAuthorizationParameters($options);
+        $requestUri = $this->pushedAuthorizationRequest($params);
+        $query = $this->getAuthorizationQuery([
+            'client_id' => (string) $this->clientId,
+            'request_uri' => $requestUri,
+        ]);
+
+        return $this->appendQuery($this->getBaseAuthorizationUrl(), $query);
+    }
+
+    /**
+     * Mutate an outgoing token / PAR parameter set to carry the configured client
+     * authentication. `private_key_jwt` drops any client_secret and adds the
+     * client_assertion (RFC 7523); otherwise client_id / client_secret travel in the
+     * POST body. Shared by the token, refresh and PAR requests so all authenticate
+     * identically.
+     *
+     * @param array<string,mixed> $params
+     * @return array<string,mixed>
+     */
+    private function applyClientAuth(array $params): array
+    {
+        if ($this->tokenEndpointAuthMethod === 'private_key_jwt') {
+            unset($params['client_secret']);
+            $params['client_assertion_type'] = self::CLIENT_ASSERTION_TYPE;
+            $params['client_assertion'] = $this->buildClientAssertion();
+
+            return $params;
+        }
+        $params['client_id'] = (string) $this->clientId;
+        if ($this->clientSecret !== null && $this->clientSecret !== '') {
+            $params['client_secret'] = (string) $this->clientSecret;
+        }
+
+        return $params;
+    }
+
+    /**
+     * Build a signed `private_key_jwt` client-authentication assertion (RFC 7523):
+     * `iss` and `sub` are the client_id, `aud` the token endpoint (the Colony accepts
+     * that or the issuer), with a fresh `jti` and a short `exp` so it is single-use and
+     * replay-bounded. Signed with the configured key + algorithm; the same assertion
+     * authenticates the token, refresh and PAR requests.
+     */
+    private function buildClientAssertion(): string
+    {
+        $now = time();
+        $claims = [
+            'iss' => (string) $this->clientId,
+            'sub' => (string) $this->clientId,
+            'aud' => $this->endpoint('token_endpoint', '/oauth/token'),
+            'jti' => bin2hex(random_bytes(32)),
+            'iat' => $now,
+            'exp' => $now + self::ASSERTION_LIFETIME,
+        ];
+        /** @var class-string $algClass */
+        $algClass = 'Jose\\Component\\Signature\\Algorithm\\' . $this->signingAlg;
+        $builder = new JWSBuilder(new AlgorithmManager([new $algClass()]));
+        $header = ['alg' => $this->signingAlg, 'typ' => 'JWT'];
+        if ($this->privateKeyId !== null && $this->privateKeyId !== '') {
+            $header['kid'] = $this->privateKeyId;
+        }
+        $jws = $builder->create()
+            ->withPayload((string) json_encode($claims))
+            ->addSignature($this->signingJwk(), $header)
+            ->build();
+
+        return (new CompactSerializer())->serialize($jws, 0);
+    }
+
+    /** Resolve the configured private key to a web-token JWK (a JWK, a PEM string, or a PEM file path). */
+    private function signingJwk(): JWK
+    {
+        if ($this->privateKey instanceof JWK) {
+            return $this->privateKey;
+        }
+        $extra = ($this->privateKeyId !== null && $this->privateKeyId !== '') ? ['kid' => $this->privateKeyId] : [];
+        $key = (string) $this->privateKey;
+        if (str_contains($key, '-----BEGIN')) {
+            return JWKFactory::createFromKey($key, null, $extra);
+        }
+
+        return JWKFactory::createFromKeyFile($key, null, $extra);
+    }
+
+    /**
+     * Push the authorization $params to the IdP's PAR endpoint (RFC 9126) and return
+     * the issued one-time `request_uri`. Authenticates with the same credential as the
+     * token endpoint. Throws {@see ColonyOidcException} when the IdP doesn't advertise
+     * PAR, or on a transport / protocol failure.
+     *
+     * @param array<string,mixed> $params
+     */
+    private function pushedAuthorizationRequest(array $params): string
+    {
+        $disc = $this->discovery();
+        $endpoint = $disc['pushed_authorization_request_endpoint'] ?? null;
+        if (!is_string($endpoint) || $endpoint === '') {
+            throw new ColonyOidcException(
+                'the Colony IdP does not advertise a PAR endpoint (pushed_authorization_request_endpoint)',
+            );
+        }
+        try {
+            $response = $this->getHttpClient()->request('POST', $endpoint, [
+                'form_params' => $this->applyClientAuth($params),
+                'headers' => ['Accept' => 'application/json'],
+            ]);
+        } catch (\Throwable $e) {
+            throw new ColonyOidcException('PAR request failed: ' . $endpoint, 0, $e);
+        }
+        $status = $response->getStatusCode();
+        $data = json_decode((string) $response->getBody(), true);
+        if ($status < 200 || $status >= 300 || !is_array($data)) {
+            throw new ColonyOidcException('PAR endpoint returned an unexpected response (HTTP ' . $status . ')');
+        }
+        $requestUri = $data['request_uri'] ?? null;
+        if (!is_string($requestUri) || $requestUri === '') {
+            throw new ColonyOidcException('PAR response did not include a request_uri');
+        }
+
+        return $requestUri;
     }
 
     // -- discovery + http helpers ---------------------------------------------

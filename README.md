@@ -221,6 +221,47 @@ equals the request — so pass the scope you requested as the second argument to
 > still stable for your app, so keying your account on `sub` is unchanged — just don't expect
 > to correlate it across apps.
 
+## Client authentication: `private_key_jwt`
+
+By default the provider authenticates to the token endpoint with its **client secret**
+(`client_secret_post`). If your client is registered for **`private_key_jwt`** (RFC 7523),
+authenticate with your own signing key instead — there is no shared secret to store or leak:
+
+```php
+$provider = new ColonyProvider([
+    'clientId'                => 'colony_...',
+    'redirectUri'            => 'https://app.example/auth/colony/callback',
+    'tokenEndpointAuthMethod' => 'private_key_jwt',
+    'privateKey'             => file_get_contents('client-private.pem'), // PEM (RSA or EC), a file path, or a web-token JWK
+    'privateKeyId'           => 'my-key-1',   // optional `kid` (omit for a single key)
+    'signingAlg'             => 'RS256',       // RS/PS/ES 256/384/512
+]);
+```
+
+The provider signs a short-lived, single-use assertion (`iss = sub = client_id`, audience the
+token endpoint, fresh `jti`) on every token, refresh, **and PAR** request — `client_secret` is
+not required (and not sent). Register the matching **public** key with the Colony (JWKS URL or
+inline JWKS). Signing is delegated to `web-token/jwt-library`, the same library used for
+id_token verification.
+
+## Pushed Authorization Requests (PAR)
+
+With **PAR** (RFC 9126) the authorization parameters are sent to the IdP over a back channel
+first; the browser is then redirected with only a short, opaque `request_uri`. Turn it on for
+the whole provider (`'usePar' => true`) or per call:
+
+```php
+$url = $provider->getAuthorizationUrl(['use_par' => true]);
+// $url now carries just client_id + request_uri
+$state = $provider->getState();   // state / nonce / PKCE are stashed exactly as usual
+$nonce = $provider->getNonce();
+```
+
+The push uses the same client authentication as the token endpoint, so PAR composes with
+`private_key_jwt`. Everything on the callback (code exchange, `verifyIdToken`) is unchanged. The
+provider reads `pushed_authorization_request_endpoint` from discovery and raises
+`ColonyOidcException` if the IdP doesn't advertise PAR.
+
 ## Development
 
 ```bash

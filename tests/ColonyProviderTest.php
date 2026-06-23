@@ -7,7 +7,12 @@ namespace TheColony\OAuth2\Tests;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
+use Jose\Component\Core\AlgorithmManager;
+use Jose\Component\Signature\Algorithm\RS256;
+use Jose\Component\Signature\JWSVerifier;
+use Jose\Component\Signature\Serializer\CompactSerializer;
 use League\OAuth2\Client\Token\AccessToken;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -47,6 +52,27 @@ final class ColonyProviderTest extends TestCase
     private function discoveryResponse(): Response
     {
         return new Response(200, ['Content-Type' => 'application/json'], (string) json_encode(self::DISCOVERY));
+    }
+
+    /**
+     * Like {@see provider()} but records every outgoing request into $history so a test
+     * can inspect the body the provider actually sent. Omits the default clientSecret so
+     * private_key_jwt configs don't carry one.
+     *
+     * @param list<Response> $responses
+     * @param array<int,mixed> $history
+     * @param array<string,mixed> $options
+     */
+    private function providerWithHistory(array $responses, array &$history, array $options = []): ColonyProvider
+    {
+        $stack = HandlerStack::create(new MockHandler($responses));
+        $stack->push(Middleware::history($history));
+        $client = new Client(['handler' => $stack]);
+
+        return new ColonyProvider(array_merge([
+            'clientId' => 'colony_client_abc',
+            'redirectUri' => 'https://app.example/auth/colony/callback',
+        ], $options), ['httpClient' => $client]);
     }
 
     #[Test]
@@ -608,5 +634,182 @@ final class ColonyProviderTest extends TestCase
         self::assertSame(['openid', 'profile', 'email'],
             $provider->grantedScopes($token, 'openid profile email'));
         self::assertSame([], $provider->grantedScopes($token));   // no fallback -> empty
+    }
+
+    // -- client auth: private_key_jwt (RFC 7523) ------------------------------
+
+    #[Test]
+    public function token_auth_method_rejects_an_unknown_value(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('tokenEndpointAuthMethod');
+        $this->provider([], ['tokenEndpointAuthMethod' => 'client_secret_jwt']);
+    }
+
+    #[Test]
+    public function private_key_jwt_requires_a_private_key(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('privateKey is required');
+        $this->provider([], ['tokenEndpointAuthMethod' => 'private_key_jwt']);
+    }
+
+    #[Test]
+    public function private_key_jwt_rejects_a_non_asymmetric_signing_alg(): void
+    {
+        $kit = new OidcTestKit();
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('signingAlg');
+        $this->provider([], [
+            'tokenEndpointAuthMethod' => 'private_key_jwt',
+            'privateKey' => $kit->key,
+            'signingAlg' => 'HS256',
+        ]);
+    }
+
+    #[Test]
+    public function client_secret_post_requires_a_client_secret(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('clientSecret is required');
+        // providerWithHistory omits the secret; default method needs one.
+        $h = [];
+        $this->providerWithHistory([], $h);
+    }
+
+    #[Test]
+    public function private_key_jwt_authenticates_the_token_request_with_a_signed_assertion(): void
+    {
+        $kit = new OidcTestKit();
+        $history = [];
+        $provider = $this->providerWithHistory([
+            $this->discoveryResponse(),
+            new Response(200, ['Content-Type' => 'application/json'],
+                (string) json_encode(['access_token' => 'at-1', 'token_type' => 'Bearer'])),
+        ], $history, [
+            'tokenEndpointAuthMethod' => 'private_key_jwt',
+            'privateKey' => $kit->key,
+            'privateKeyId' => 'test-1',
+        ]);
+
+        $token = $provider->getAccessToken('authorization_code', ['code' => 'auth-code']);
+        self::assertSame('at-1', $token->getToken());
+
+        // Inspect the body the provider actually POSTed to the token endpoint.
+        $sentBody = (string) end($history)['request']->getBody();
+        parse_str($sentBody, $body);
+        self::assertSame('urn:ietf:params:oauth:client-assertion-type:jwt-bearer', $body['client_assertion_type']);
+        self::assertArrayHasKey('client_assertion', $body);
+        self::assertArrayNotHasKey('client_secret', $body);
+
+        // The assertion must verify against the public key and carry the right claims.
+        $jws = (new CompactSerializer())->unserialize($body['client_assertion']);
+        $verifier = new JWSVerifier(new AlgorithmManager([new RS256()]));
+        self::assertTrue($verifier->verifyWithKey($jws, $kit->key->toPublic(), 0));
+        self::assertSame('test-1', $jws->getSignature(0)->getProtectedHeader()['kid']);
+        $claims = json_decode((string) $jws->getPayload(), true);
+        self::assertSame('colony_client_abc', $claims['iss']);
+        self::assertSame('colony_client_abc', $claims['sub']);
+        self::assertSame('https://thecolony.cc/oauth/token', $claims['aud']);
+        self::assertNotEmpty($claims['jti']);
+        self::assertGreaterThan(time(), $claims['exp']);
+    }
+
+    #[Test]
+    public function private_key_jwt_also_authenticates_the_refresh_request(): void
+    {
+        $kit = new OidcTestKit();
+        $history = [];
+        $provider = $this->providerWithHistory([
+            $this->discoveryResponse(),
+            new Response(200, ['Content-Type' => 'application/json'], (string) json_encode(['access_token' => 'at-2'])),
+        ], $history, ['tokenEndpointAuthMethod' => 'private_key_jwt', 'privateKey' => $kit->key]);
+
+        $provider->getAccessToken('refresh_token', ['refresh_token' => 'rt-1']);
+        parse_str((string) end($history)['request']->getBody(), $body);
+        self::assertArrayHasKey('client_assertion', $body);
+        self::assertSame('rt-1', $body['refresh_token']);
+        self::assertArrayNotHasKey('client_secret', $body);
+    }
+
+    // -- PAR (RFC 9126) -------------------------------------------------------
+
+    #[Test]
+    public function par_pushes_parameters_and_returns_a_request_uri_url(): void
+    {
+        $history = [];
+        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.cc/oauth/par']);
+        $provider = $this->providerWithHistory([
+            new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($disc)),
+            new Response(201, ['Content-Type' => 'application/json'],
+                (string) json_encode(['request_uri' => 'urn:colony:par:abc123', 'expires_in' => 60])),
+        ], $history, ['clientSecret' => 'secret', 'usePar' => true]);
+
+        $url = $provider->getAuthorizationUrl(['scope' => 'openid profile']);
+
+        // The browser URL carries ONLY client_id + request_uri.
+        self::assertStringStartsWith('https://thecolony.cc/oauth/authorize?', $url);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        self::assertEqualsCanonicalizing(['client_id', 'request_uri'], array_keys($q));
+        self::assertSame('urn:colony:par:abc123', $q['request_uri']);
+        self::assertSame('colony_client_abc', $q['client_id']);
+
+        // The push (2nd HTTP call) carried the real authorization params + client auth.
+        $par = end($history)['request'];
+        self::assertSame('https://thecolony.cc/oauth/par', (string) $par->getUri());
+        self::assertSame('POST', $par->getMethod());
+        parse_str((string) $par->getBody(), $pushed);
+        self::assertSame('code', $pushed['response_type']);
+        self::assertSame('openid profile', $pushed['scope']);
+        self::assertArrayHasKey('state', $pushed);
+        self::assertArrayHasKey('nonce', $pushed);
+        self::assertSame('secret', $pushed['client_secret']);   // client_secret_post auth on the push
+
+        // state / nonce are retrievable as on the normal path.
+        self::assertSame($pushed['state'], $provider->getState());
+        self::assertSame($pushed['nonce'], $provider->getNonce());
+    }
+
+    #[Test]
+    public function par_composes_with_private_key_jwt(): void
+    {
+        $kit = new OidcTestKit();
+        $history = [];
+        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.cc/oauth/par']);
+        $provider = $this->providerWithHistory([
+            new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($disc)),
+            new Response(201, ['Content-Type' => 'application/json'], (string) json_encode(['request_uri' => 'urn:colony:par:xyz'])),
+        ], $history, ['tokenEndpointAuthMethod' => 'private_key_jwt', 'privateKey' => $kit->key, 'usePar' => true]);
+
+        $provider->getAuthorizationUrl();
+        parse_str((string) end($history)['request']->getBody(), $pushed);
+        self::assertArrayNotHasKey('client_secret', $pushed);
+        self::assertSame('urn:ietf:params:oauth:client-assertion-type:jwt-bearer', $pushed['client_assertion_type']);
+        self::assertArrayHasKey('client_assertion', $pushed);
+    }
+
+    #[Test]
+    public function par_can_be_enabled_per_call(): void
+    {
+        $history = [];
+        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.cc/oauth/par']);
+        $provider = $this->providerWithHistory([
+            new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($disc)),
+            new Response(201, ['Content-Type' => 'application/json'], (string) json_encode(['request_uri' => 'urn:colony:par:perCall'])),
+        ], $history, ['clientSecret' => 'secret']); // usePar defaults to false
+
+        $url = $provider->getAuthorizationUrl(['use_par' => true]);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        self::assertSame('urn:colony:par:perCall', $q['request_uri']);
+        self::assertArrayNotHasKey('use_par', $q);
+    }
+
+    #[Test]
+    public function par_raises_when_the_idp_does_not_advertise_it(): void
+    {
+        $provider = $this->provider([$this->discoveryResponse()], ['usePar' => true]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('PAR endpoint');
+        $provider->getAuthorizationUrl();
     }
 }
