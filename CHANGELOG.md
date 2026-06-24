@@ -4,6 +4,23 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## 0.2.4 - 2026-06-24
+
+### Added
+- **`requireAcr` option** — set it (e.g. `'mfa'`) and the provider sends `acr_values`
+  on the authorization request so the IdP enforces the authentication context up front
+  (prompting a 2FA step-up), then re-checks the returned id_token's `acr`/`amr` in
+  `verifyIdToken()` (throwing `ColonyOidcException` if unmet). An explicit
+  `['acr_values' => …]` passed to `getAuthorizationUrl()` overrides per request.
+- **`ColonyResourceOwner` getters** for the authentication context + session:
+  `getAcr()`, `getAmr()`, `isMfa()`, `getSid()` (persist it to scope a later
+  back-channel logout to a single session), and `getAuthTime()`.
+- Documented `max_age` / `login_hint` (and `acr_values`) as pass-through
+  `getAuthorizationUrl()` options — they reach the Colony's "Log in with the Colony"
+  IdP, which now honours them.
+
+All additive and backward compatible.
+
 ## 0.2.3 - 2026-06-24
 
 ### Added

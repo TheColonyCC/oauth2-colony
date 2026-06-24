@@ -68,6 +68,60 @@ final class ColonyResourceOwner implements ResourceOwnerInterface
         return $this->getVerifiedHuman() === false;
     }
 
+    /** Authentication Context Class Reference (`acr`) — `"mfa"` / `"single"`, or null. */
+    public function getAcr(): ?string
+    {
+        $v = $this->claims['acr'] ?? null;
+
+        return $v === null ? null : (string) $v;
+    }
+
+    /**
+     * Authentication Methods References (`amr`, RFC 8176) — e.g. `["pwd","otp","mfa"]`.
+     *
+     * @return list<string>
+     */
+    public function getAmr(): array
+    {
+        $amr = $this->claims['amr'] ?? [];
+        if (is_string($amr)) {
+            $amr = preg_split('/\s+/', trim($amr)) ?: [];
+        }
+        if (!is_array($amr)) {
+            return [];
+        }
+
+        return array_values(array_map('strval', array_filter($amr, 'is_scalar')));
+    }
+
+    /**
+     * True when the login cleared a second factor — `acr === "mfa"` or `"mfa"` in `amr`.
+     * Falsey-safe: false when neither signal indicates MFA.
+     */
+    public function isMfa(): bool
+    {
+        return $this->getAcr() === 'mfa' || in_array('mfa', $this->getAmr(), true);
+    }
+
+    /**
+     * The session id (`sid`) — persist it against your local session so a later
+     * back-channel logout carrying this `sid` can terminate exactly this session.
+     */
+    public function getSid(): ?string
+    {
+        $v = $this->claims['sid'] ?? null;
+
+        return $v === null ? null : (string) $v;
+    }
+
+    /** When the user authenticated (`auth_time`, epoch seconds), or null. */
+    public function getAuthTime(): ?int
+    {
+        $v = $this->claims['auth_time'] ?? null;
+
+        return $v === null ? null : (int) $v;
+    }
+
     /** @return array<string,mixed> */
     public function toArray(): array
     {

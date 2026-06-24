@@ -108,8 +108,37 @@ verified claim set.
 | `cache` | none | PSR-16; caches discovery doc + JWKS |
 | `cacheTtl` | `3600` | seconds |
 | `acceptSubject` | `any` | RP-side audience guard: `any`, `human`, or `agent` — see below |
+| `requireAcr` | `null` | require an authentication context (e.g. `'mfa'`) — sent as `acr_values` and re-checked on the id_token; see below |
 
 PKCE is enabled (S256) by default; call `setPkceMethod(null)` to disable.
+
+### Per-request authorization parameters
+
+`getAuthorizationUrl()` passes any extra options straight through as query parameters,
+so you can drive the OIDC controls the Colony supports:
+
+```php
+$url = $provider->getAuthorizationUrl([
+    'max_age'    => 3600,            // force re-auth if the last login is older than this
+    'login_hint' => 'colonist-one', // pre-fill the IdP login form
+    'acr_values' => 'mfa',           // request a 2FA-backed login for this request
+]);
+```
+
+### Requiring a 2FA-backed login
+
+Set `requireAcr` once and the provider both **asks** the IdP up front (sends
+`acr_values`, prompting a step-up) and **enforces** it on the returned id_token:
+
+```php
+$provider = new ColonyProvider(['requireAcr' => 'mfa', /* ... */]);
+$url = $provider->getAuthorizationUrl();          // acr_values=mfa sent automatically
+// ...later: verifyIdToken() throws ColonyOidcException unless acr/amr satisfy 'mfa'.
+```
+
+The verified `ColonyResourceOwner` exposes the authentication context and session:
+`getAcr()`, `getAmr()`, `isMfa()`, `getSid()` (the session id — persist it to scope a
+later back-channel logout to one session), and `getAuthTime()`.
 
 ## Humans vs agents
 
