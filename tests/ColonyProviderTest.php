@@ -298,6 +298,98 @@ final class ColonyProviderTest extends TestCase
     }
 
     #[Test]
+    public function resource_owner_exposes_acr_amr_sid_and_auth_time(): void
+    {
+        $owner = new ColonyResourceOwner(OidcTestKit::claims([
+            'acr' => 'mfa',
+            'amr' => ['pwd', 'otp', 'mfa'],
+            'sid' => 'sess_42',
+            'auth_time' => 1700000000,
+        ]));
+        self::assertSame('mfa', $owner->getAcr());
+        self::assertSame(['pwd', 'otp', 'mfa'], $owner->getAmr());
+        self::assertTrue($owner->isMfa());
+        self::assertSame('sess_42', $owner->getSid());
+        self::assertSame(1700000000, $owner->getAuthTime());
+    }
+
+    #[Test]
+    public function resource_owner_acr_fields_absent_are_null(): void
+    {
+        $owner = new ColonyResourceOwner(OidcTestKit::claims());
+        self::assertNull($owner->getAcr());
+        self::assertSame([], $owner->getAmr());
+        self::assertFalse($owner->isMfa());
+        self::assertNull($owner->getSid());
+        self::assertNull($owner->getAuthTime());
+    }
+
+    #[Test]
+    public function require_acr_sends_acr_values_on_the_authorization_url(): void
+    {
+        $provider = $this->provider([$this->discoveryResponse()], ['requireAcr' => 'mfa']);
+        parse_str((string) parse_url($provider->getAuthorizationUrl(), PHP_URL_QUERY), $q);
+        self::assertSame('mfa', $q['acr_values']);
+    }
+
+    #[Test]
+    public function explicit_acr_values_option_overrides_require_acr(): void
+    {
+        $provider = $this->provider([$this->discoveryResponse()], ['requireAcr' => 'mfa']);
+        parse_str((string) parse_url($provider->getAuthorizationUrl(['acr_values' => 'single']), PHP_URL_QUERY), $q);
+        self::assertSame('single', $q['acr_values']);
+    }
+
+    #[Test]
+    public function no_acr_values_when_require_acr_unset(): void
+    {
+        $provider = $this->provider([$this->discoveryResponse()]);
+        parse_str((string) parse_url($provider->getAuthorizationUrl(), PHP_URL_QUERY), $q);
+        self::assertArrayNotHasKey('acr_values', $q);
+    }
+
+    #[Test]
+    public function max_age_and_login_hint_pass_through_to_the_authorization_url(): void
+    {
+        $provider = $this->provider([$this->discoveryResponse()]);
+        $url = $provider->getAuthorizationUrl(['max_age' => 3600, 'login_hint' => 'colonist-one']);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        self::assertSame('3600', $q['max_age']);
+        self::assertSame('colonist-one', $q['login_hint']);
+    }
+
+    #[Test]
+    public function verify_id_token_enforces_require_acr(): void
+    {
+        $kit = new OidcTestKit();
+        $idToken = $kit->idToken(OidcTestKit::claims(['acr' => 'single', 'amr' => ['pwd']]));
+        $token = new AccessToken(['access_token' => 'at', 'id_token' => $idToken]);
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $kit->jwksJson()),
+        ], ['requireAcr' => 'mfa']);
+
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage("requires acr='mfa'");
+        $provider->verifyIdToken($token, 'nonce-xyz');
+    }
+
+    #[Test]
+    public function verify_id_token_accepts_satisfied_require_acr(): void
+    {
+        $kit = new OidcTestKit();
+        $idToken = $kit->idToken(OidcTestKit::claims(['acr' => 'mfa', 'amr' => ['pwd', 'otp', 'mfa']]));
+        $token = new AccessToken(['access_token' => 'at', 'id_token' => $idToken]);
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $kit->jwksJson()),
+        ], ['requireAcr' => 'mfa']);
+
+        $claims = $provider->verifyIdToken($token, 'nonce-xyz');
+        self::assertSame('mfa', $claims['acr']);
+    }
+
+    #[Test]
     public function resource_owner_tolerates_missing_claims(): void
     {
         $owner = new ColonyResourceOwner([]);

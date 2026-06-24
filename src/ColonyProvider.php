@@ -51,6 +51,14 @@ final class ColonyProvider extends AbstractProvider
     protected ?string $pkceMethod = self::PKCE_METHOD_S256;
     /** RP-side audience restriction: "any" (default), "human", or "agent". */
     protected string $acceptSubject = 'any';
+
+    /**
+     * When set (e.g. `'mfa'`), require this Authentication Context Class. The provider
+     * sends it as `acr_values` on the authorization request — so the IdP enforces it up
+     * front (prompting a 2FA step-up) — and re-checks the returned id_token's `acr`/`amr`
+     * in {@see verifyIdToken} as defence in depth. Null (default) = no requirement.
+     */
+    protected ?string $requireAcr = null;
     /** Token/PAR-endpoint client auth: 'client_secret_post' (default) or 'private_key_jwt'. */
     protected string $tokenEndpointAuthMethod = 'client_secret_post';
     /** For private_key_jwt: a PEM string, a path to a PEM file, or a web-token JWK. */
@@ -173,6 +181,14 @@ final class ColonyProvider extends AbstractProvider
         $params = parent::getAuthorizationParameters($options);
         $this->nonce = $options['nonce'] ?? $this->getRandomState();
         $params['nonce'] = $this->nonce;
+        // Auto-send acr_values from a configured requireAcr so the IdP enforces the
+        // authentication context up front (e.g. a 2FA step-up). An explicit
+        // ['acr_values' => ...] passed to getAuthorizationUrl() wins (it's already in
+        // $params via the parent merge). max_age / login_hint / prompt similarly flow
+        // through $options untouched.
+        if ($this->requireAcr !== null && !isset($params['acr_values'])) {
+            $params['acr_values'] = $this->requireAcr;
+        }
 
         return $params;
     }
@@ -315,6 +331,7 @@ final class ColonyProvider extends AbstractProvider
         }
 
         $this->assertSubjectAccepted($claims);
+        $this->assertAcrSatisfied($claims);
 
         return $claims;
     }
@@ -435,6 +452,31 @@ final class ColonyProvider extends AbstractProvider
         if ($this->acceptSubject === 'agent' && $isHuman) {
             throw new ColonyOidcException('this client accepts agent subjects only, but a human authenticated');
         }
+    }
+
+    /**
+     * Enforce the optional `requireAcr` against the verified id_token claims. RP-side
+     * defence in depth that complements sending `acr_values` on the authorization
+     * request: even if the IdP somehow returned a weaker login, the RP refuses it here.
+     * Satisfied when the id_token's `acr` equals the requirement OR the requirement
+     * appears in `amr` (so `requireAcr='mfa'` accepts either signal).
+     *
+     * @param array<string,mixed> $claims
+     */
+    private function assertAcrSatisfied(array $claims): void
+    {
+        if ($this->requireAcr === null) {
+            return;
+        }
+        $acr = isset($claims['acr']) ? (string) $claims['acr'] : null;
+        $amr = is_array($claims['amr'] ?? null) ? array_map('strval', $claims['amr']) : [];
+        if ($acr === $this->requireAcr || in_array($this->requireAcr, $amr, true)) {
+            return;
+        }
+        throw new ColonyOidcException(
+            "this client requires acr='{$this->requireAcr}' but the login presented "
+            . "acr=" . ($acr === null ? 'null' : "'{$acr}'") . ' / amr=[' . implode(',', $amr) . ']',
+        );
     }
 
     /**
