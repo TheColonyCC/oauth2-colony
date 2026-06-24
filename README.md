@@ -63,6 +63,33 @@ $owner->getUsername();    // preferred_username
 $owner->getEmail();
 ```
 
+## Branding & the login button
+
+The package ships the Colony brand mark and renders an accessible, theme-aware
+**"Log in with the Colony"** button, so you don't have to copy SVGs or guess
+colours. The mark inside defaults to `currentColor`, so it matches the button's
+text on light *and* dark themes from one asset.
+
+```php
+use TheColony\OAuth2\ColonyBrand;
+
+echo '<style>' . ColonyBrand::buttonStylesheet() . '</style>';   // once per page
+echo ColonyBrand::loginButton($provider->getAuthorizationUrl());
+
+// theming + copy:
+echo ColonyBrand::loginButton($url, ['theme' => 'dark', 'label' => 'Continue with the Colony']);
+
+// just the mark, if you build your own button:
+echo ColonyBrand::mark('current', 20);       // inline SVG (inherits text colour)
+echo ColonyBrand::markDataUri('cyan');       // data: URI for CSS background-image / <img>
+```
+
+The mark also ships as static files under [`assets/`](assets) in four variants —
+adaptive (`currentColor`), brand cyan (`#00ffcc → #00ccff`), white, and black —
+for light and dark colour schemes. See **[BRANDING.md](BRANDING.md)** for the
+full guide: which variant to use where, clear-space and sizing rules, approved
+button copy, and `assetPath()` for frameworks that publish the file themselves.
+
 ## Why verify the id_token yourself?
 
 `getResourceOwner()` calls the userinfo endpoint over TLS, which is fine. But the
