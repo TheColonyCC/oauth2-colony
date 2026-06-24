@@ -121,6 +121,27 @@ final class IdTokenVerifierTest extends TestCase
     }
 
     #[Test]
+    public function null_nonce_skips_the_check_for_a_nonceless_token(): void
+    {
+        // RFC 8693 token-exchange id_tokens carry no nonce.
+        $claims = OidcTestKit::claims();
+        unset($claims['nonce']);
+        $token = $this->kit->idToken($claims);
+
+        $verified = $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.cc', 'colony_client_abc', null);
+        self::assertSame('colony-sub-123', $verified['sub']);
+    }
+
+    #[Test]
+    public function null_nonce_ignores_a_present_nonce(): void
+    {
+        $token = $this->kit->idToken(OidcTestKit::claims(['nonce' => 'whatever']));
+
+        $verified = $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.cc', 'colony_client_abc', null);
+        self::assertSame('colony-sub-123', $verified['sub']);
+    }
+
+    #[Test]
     public function it_rejects_missing_sub(): void
     {
         $this->expectException(ColonyOidcException::class);

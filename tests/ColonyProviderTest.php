@@ -205,6 +205,87 @@ final class ColonyProviderTest extends TestCase
         $provider->verifyIdToken($token, 'nonce-xyz');
     }
 
+    // ---- RFC 8693 token exchange (the agent-native path) --------------------
+
+    #[Test]
+    public function token_exchange_returns_an_audience_scoped_id_token(): void
+    {
+        $kit = new OidcTestKit();
+        $idToken = $kit->idToken(OidcTestKit::claims(['aud' => 'colony_client_abc']));
+        $tokenBody = (string) json_encode([
+            'access_token' => 'exch-at',
+            'issued_token_type' => 'urn:ietf:params:oauth:token-type:access_token',
+            'token_type' => 'Bearer',
+            'expires_in' => 900,
+            'id_token' => $idToken,
+        ]);
+        $history = [];
+        $provider = $this->providerWithHistory([
+            $this->discoveryResponse(),
+            new Response(200, ['Content-Type' => 'application/json'], $tokenBody),
+        ], $history, ['clientSecret' => 'secret']);
+
+        $token = $provider->exchangeToken('the-agent-jwt', 'colony_client_abc');
+        self::assertSame('exch-at', $token->getToken());
+        self::assertSame($idToken, $token->getValues()['id_token']);
+
+        parse_str((string) $history[1]['request']->getBody(), $sent);
+        self::assertSame('urn:ietf:params:oauth:grant-type:token-exchange', $sent['grant_type']);
+        self::assertSame('the-agent-jwt', $sent['subject_token']);
+        self::assertSame('urn:ietf:params:oauth:token-type:access_token', $sent['subject_token_type']);
+        self::assertSame('colony_client_abc', $sent['audience']);
+        self::assertSame('openid profile', $sent['scope']);
+    }
+
+    #[Test]
+    public function token_exchange_defaults_audience_to_the_client_id(): void
+    {
+        $kit = new OidcTestKit();
+        $tokenBody = (string) json_encode(['access_token' => 'x', 'id_token' => $kit->idToken(OidcTestKit::claims())]);
+        $history = [];
+        $provider = $this->providerWithHistory([
+            $this->discoveryResponse(),
+            new Response(200, ['Content-Type' => 'application/json'], $tokenBody),
+        ], $history);
+
+        $provider->exchangeToken('jwt-only');
+        parse_str((string) $history[1]['request']->getBody(), $sent);
+        self::assertSame('colony_client_abc', $sent['audience']);
+    }
+
+    #[Test]
+    public function token_exchange_surfaces_oauth_errors(): void
+    {
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(400, ['Content-Type' => 'application/json'], (string) json_encode([
+                'error' => 'invalid_target', 'error_description' => 'audience not allowed',
+            ])),
+        ]);
+        $this->expectException(\League\OAuth2\Client\Provider\Exception\IdentityProviderException::class);
+        $this->expectExceptionMessage('audience not allowed');
+        $provider->exchangeToken('jwt', 'bad-aud');
+    }
+
+    #[Test]
+    public function exchanged_id_token_verifies_with_a_null_nonce(): void
+    {
+        $kit = new OidcTestKit();
+        $claims = OidcTestKit::claims();
+        unset($claims['nonce']); // exchanged id_tokens carry no nonce
+        $idToken = $kit->idToken($claims);
+        $tokenBody = (string) json_encode(['access_token' => 'x', 'id_token' => $idToken]);
+        $provider = $this->provider([
+            $this->discoveryResponse(),                  // resolve token_endpoint (memoised after)
+            new Response(200, ['Content-Type' => 'application/json'], $tokenBody),
+            new Response(200, [], $kit->jwksJson()),     // verifyIdToken's JWKS fetch
+        ]);
+
+        $token = $provider->exchangeToken('agent-jwt');
+        $verified = $provider->verifyIdToken($token, null);
+        self::assertSame('colonist-one', $verified['preferred_username']);
+    }
+
     #[Test]
     public function resource_owner_maps_claims(): void
     {

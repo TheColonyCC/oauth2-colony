@@ -34,7 +34,10 @@ final class IdTokenVerifier
     }
 
     /**
-     * @param string $jwksJson  Raw JWKS document (the issuer's signing keys).
+     * @param string      $jwksJson      Raw JWKS document (the issuer's signing keys).
+     * @param string|null $expectedNonce the nonce bound to the auth request; `null` skips
+     *                                   the nonce check (e.g. an RFC 8693 token-exchange
+     *                                   id_token, which carries no nonce)
      * @return array<string,mixed> the verified claim set
      */
     public function verify(
@@ -42,7 +45,7 @@ final class IdTokenVerifier
         string $jwksJson,
         string $issuer,
         string $clientId,
-        string $expectedNonce,
+        ?string $expectedNonce = null,
         ?int $now = null,
     ): array {
         $now ??= time();
@@ -80,7 +83,7 @@ final class IdTokenVerifier
         if (!isset($claims['exp']) || $now > ((int) $claims['exp'] + self::LEEWAY_SECONDS)) {
             throw new ColonyOidcException('id_token expired');
         }
-        if (($claims['nonce'] ?? null) !== $expectedNonce) {
+        if ($expectedNonce !== null && ($claims['nonce'] ?? null) !== $expectedNonce) {
             throw new ColonyOidcException('id_token nonce mismatch');
         }
         if (!isset($claims['sub']) || $claims['sub'] === '') {

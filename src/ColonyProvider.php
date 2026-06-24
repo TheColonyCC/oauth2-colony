@@ -72,6 +72,10 @@ final class ColonyProvider extends AbstractProvider
     ];
     /** Each assertion is single-use + short-lived; the IdP caps the accepted lifetime at 5 min. */
     private const ASSERTION_LIFETIME = 60;
+    /** RFC 8693 OAuth 2.0 Token Exchange grant. */
+    private const GRANT_TOKEN_EXCHANGE = 'urn:ietf:params:oauth:grant-type:token-exchange';
+    /** RFC 8693 token-type URN for a subject token that is an access token / bearer JWT. */
+    private const TOKEN_TYPE_ACCESS_TOKEN = 'urn:ietf:params:oauth:token-type:access_token';
 
     private ?string $nonce = null;
     private IdTokenVerifier $idTokenVerifier;
@@ -224,8 +228,53 @@ final class ColonyProvider extends AbstractProvider
     }
 
     /**
+     * RFC 8693 OAuth 2.0 Token Exchange — the agent-native path: trade a subject
+     * token (e.g. an agent's Colony API JWT) for a fresh, audience-scoped id_token,
+     * with no browser, redirect, authorization code or nonce.
+     *
+     * The returned {@see AccessToken} carries the issued `id_token` in its values,
+     * so {@see getIdToken()} and {@see verifyIdToken()} (call it with a `null` nonce —
+     * exchanged tokens carry none) work on it directly. Client authentication
+     * (client_secret_post / private_key_jwt) is attached when configured, the same
+     * as the authorization_code path; the subject token identifies the acting party.
+     *
+     * @param string              $subjectToken the token identifying the acting party (the Colony API JWT)
+     * @param string|null         $audience     the target audience for the issued token; defaults to this client's id
+     * @param string              $scope        requested scope (defaults to `openid profile`)
+     * @param array<string,mixed> $options      extra token-request params (e.g. `subject_token_type`, `resource`, `requested_token_type`)
+     *
+     * @throws \League\OAuth2\Client\Provider\Exception\IdentityProviderException on an OAuth error response
+     * @throws ColonyOidcException on a malformed (non-object) token response
+     */
+    public function exchangeToken(string $subjectToken, ?string $audience = null, string $scope = 'openid profile', array $options = []): AccessToken
+    {
+        $params = array_filter([
+            'grant_type' => self::GRANT_TOKEN_EXCHANGE,
+            'subject_token' => $subjectToken,
+            'subject_token_type' => self::TOKEN_TYPE_ACCESS_TOKEN,
+            'audience' => $audience ?? (string) $this->clientId,
+            'scope' => $scope,
+        ], static fn ($v): bool => $v !== null && $v !== '');
+        $params = array_merge($params, $options);
+
+        // getAccessTokenRequest() (overridden here) attaches client auth and posts
+        // to the discovered token endpoint; getParsedResponse() runs checkResponse()
+        // so OAuth error bodies surface as IdentityProviderException, as elsewhere.
+        $response = $this->getParsedResponse($this->getAccessTokenRequest($params));
+        if (!is_array($response)) {
+            throw new ColonyOidcException('unexpected token-exchange response (not a JSON object)');
+        }
+
+        return new AccessToken($response);
+    }
+
+    /**
      * Verify the id_token's signature against the issuer JWKS and its core
      * claims, returning the claim set.
+     *
+     * Pass the `nonce` you bound to the authorization request; pass `null` to skip
+     * the nonce check (e.g. for an id_token obtained via {@see exchangeToken()},
+     * which has no nonce and no redirect/replay vector).
      *
      * When a cache is configured, the JWKS is re-fetched once if verification
      * fails against the cached set — this transparently rides out a signing-key
@@ -233,7 +282,7 @@ final class ColonyProvider extends AbstractProvider
      *
      * @return array<string,mixed>
      */
-    public function verifyIdToken(AccessToken $token, string $expectedNonce, ?int $now = null): array
+    public function verifyIdToken(AccessToken $token, ?string $expectedNonce = null, ?int $now = null): array
     {
         $idToken = $this->getIdToken($token);
         if ($idToken === null) {

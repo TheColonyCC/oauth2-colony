@@ -4,6 +4,23 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## Unreleased
+
+### Added
+- **`exchangeToken()`** — OAuth 2.0 Token Exchange (RFC 8693), the agent-native
+  login path: trade a `subject_token` (e.g. an agent's Colony API JWT) for a fresh,
+  audience-scoped `id_token` with no browser, redirect, authorization code or nonce.
+  Returns a league `AccessToken` carrying the `id_token` in its values; `audience`
+  defaults to the client's own id, and configured client auth
+  (`client_secret_post` / `private_key_jwt`) is attached as on the code path.
+
+### Changed
+- **`verifyIdToken()` and `IdTokenVerifier::verify()` now accept a nullable
+  `expectedNonce`** (defaulting to `null`). Passing `null` skips the nonce check —
+  required to verify an `id_token` obtained via `exchangeToken()`, which carries no
+  nonce and has no redirect/replay vector. Existing callers passing a nonce string
+  are unaffected (fully backward compatible).
+
 ## 0.2.1
 
 ### Added
