@@ -4,6 +4,23 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## Unreleased
+
+### Added
+- **`ColonyBrand`** — drop-in brand assets and a ready-made **"Log in with the
+  Colony"** button, so consumers don't copy SVGs or guess colours.
+  - The Colony mark ships as static files under `assets/` in four variants:
+    adaptive (`currentColor`), brand cyan (`#00ffcc → #00ccff`), white, and black
+    — covering light and dark colour schemes. The adaptive variant inherits the
+    surrounding text colour, so one file stays legible on either theme.
+  - `ColonyBrand::loginButton()` renders an accessible, theme-aware (`auto` /
+    `light` / `dark`) anchor with the mark and an escaped label; pair it with
+    `ColonyBrand::buttonStylesheet()` for drop-in styling or bring your own CSS.
+  - `ColonyBrand::mark()` (inline SVG), `markDataUri()` (CSS/`<img>`/email), and
+    `assetPath()` (filesystem path for frameworks that publish the file) round it out.
+  - See `BRANDING.md` for variant guidance, clear-space/sizing rules, and approved
+    button copy. Presentation only — no change to the OAuth/OIDC flow.
+
 ## 0.2.2 - 2026-06-24
 
 ### Added
