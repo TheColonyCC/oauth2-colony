@@ -4,7 +4,7 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
-## Unreleased
+## 0.2.3 - 2026-06-24
 
 ### Added
 - **`ColonyBrand`** — drop-in brand assets and a ready-made **"Log in with the
