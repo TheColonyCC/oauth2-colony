@@ -4,6 +4,22 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## 0.2.5 - 2026-06-25
+
+### Added
+- **`validateAuthorizationResponseIssuer()`** — RFC 9207 Authorization Response Issuer
+  validation (mix-up-attack defence): checks the `iss` query parameter the authorization
+  endpoint returns matches the configured issuer. Call it first on the callback, alongside
+  your `state` check and before `raiseForCallbackError()` (RFC 9207 applies to success and
+  error responses). Strict by design — it requires `iss` (the Colony IdP always emits it).
+- **`validateFrontChannelLogout()`** — OIDC Front-Channel Logout 1.0 receiver: validates the
+  `iss` + `sid` params the Colony sends to your registered `frontchannel_logout_uri` when a
+  connected user signs out, so you can clear the matching local session (keyed by the `sid`
+  you persisted from `ColonyResourceOwner::getSid()`). Throws `ColonyOidcException` on a wrong
+  issuer or a missing/empty `sid`.
+
+All additive and backward compatible.
+
 ## 0.2.4 - 2026-06-24
 
 ### Added

@@ -376,6 +376,42 @@ final class ColonyProvider extends AbstractProvider
     }
 
     /**
+     * OIDC Front-Channel Logout 1.0 receiver: validate the `iss` + `sid` query parameters
+     * the Colony sends to your registered `frontchannel_logout_uri` (typically loaded in a
+     * hidden iframe) when a connected user signs out, so you can clear the matching local
+     * session — keyed by `sid`, which you persisted from {@see ColonyResourceOwner::getSid()}
+     * at login. Unlike {@see validateLogoutToken()} (back-channel) there is no signed token to
+     * verify; the front-channel notification is a bare redirect, so the only checks are that
+     * the `iss` matches the configured issuer and a non-empty `sid` is present. Returns cleanly
+     * when both are valid; throws {@see ColonyOidcException} otherwise.
+     *
+     * Example:
+     * ```php
+     * $provider->validateFrontChannelLogout($_GET);
+     * $yourSessionStore->destroyBySid((string) $_GET['sid']);
+     * ```
+     *
+     * @param array<string,mixed> $params the request query parameters (`$_GET`)
+     * @throws ColonyOidcException if the issuer is wrong or `sid` is missing/empty
+     */
+    public function validateFrontChannelLogout(array $params): void
+    {
+        $returnedIss = $params['iss'] ?? null;
+        if (!is_string($returnedIss) || $returnedIss === '') {
+            throw new ColonyOidcException('front-channel logout missing iss parameter');
+        }
+        if ($returnedIss !== $this->issuer) {
+            throw new ColonyOidcException(
+                "front-channel logout issuer mismatch: expected '{$this->issuer}', got '{$returnedIss}'",
+            );
+        }
+        $sid = $params['sid'] ?? null;
+        if (!is_string($sid) || $sid === '') {
+            throw new ColonyOidcException('front-channel logout missing sid parameter');
+        }
+    }
+
+    /**
      * The scopes the user actually granted, parsed from the token response's `scope`.
      *
      * Under **granular consent** a user may decline optional scopes, so the requested
@@ -423,6 +459,34 @@ final class ColonyProvider extends AbstractProvider
             throw new ColonyConsentRequiredException($detail);
         }
         throw new ColonyOidcException("authorization error: {$detail}");
+    }
+
+    /**
+     * RFC 9207 Authorization Response Issuer (mix-up-attack defence): verify the `iss`
+     * query parameter the authorization endpoint returned matches the configured issuer.
+     * Call this immediately on the callback, alongside your `state` check and before
+     * {@see raiseForCallbackError()} — RFC 9207 applies to success AND error responses,
+     * so checking `iss` first stops an attacker's error from being mis-attributed.
+     *
+     * Strict by design: unlike a lenient receiver that no-ops when `iss` is absent, this
+     * method *requires* `iss`. The Colony IdP always emits it (it advertises
+     * `authorization_response_iss_parameter_supported`), and this is an explicit opt-in
+     * method you call — so a missing `iss` is a real anomaly, not a downgrade to tolerate.
+     *
+     * @param array<string,mixed> $params the callback query parameters (`$_GET`)
+     * @throws ColonyOidcException if `iss` is missing/empty or doesn't match the issuer
+     */
+    public function validateAuthorizationResponseIssuer(array $params): void
+    {
+        $returnedIss = $params['iss'] ?? null;
+        if (!is_string($returnedIss) || $returnedIss === '') {
+            throw new ColonyOidcException('authorization response missing iss parameter');
+        }
+        if ($returnedIss !== $this->issuer) {
+            throw new ColonyOidcException(
+                "authorization response issuer mismatch: expected '{$this->issuer}', got '{$returnedIss}'",
+            );
+        }
     }
 
     /**
