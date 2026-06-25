@@ -730,6 +730,98 @@ final class ColonyProviderTest extends TestCase
         self::assertSame('colony-sub-123', $provider->verifyIdToken($token, 'nonce-xyz')['sub']);
     }
 
+    // -- RFC 9207 authorization-response iss validation -----------------------
+
+    #[Test]
+    public function validate_authorization_response_issuer_accepts_a_matching_iss(): void
+    {
+        $provider = $this->provider([]);
+        $provider->validateAuthorizationResponseIssuer(['code' => 'abc', 'iss' => 'https://thecolony.cc']);
+        self::assertTrue(true);   // no exception thrown
+    }
+
+    #[Test]
+    public function validate_authorization_response_issuer_rejects_a_missing_iss(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('missing iss');
+        $provider->validateAuthorizationResponseIssuer(['code' => 'abc']);
+    }
+
+    #[Test]
+    public function validate_authorization_response_issuer_rejects_an_empty_iss(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('missing iss');
+        $provider->validateAuthorizationResponseIssuer(['code' => 'abc', 'iss' => '']);
+    }
+
+    #[Test]
+    public function validate_authorization_response_issuer_rejects_a_mismatched_iss(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('issuer mismatch');
+        $provider->validateAuthorizationResponseIssuer(['code' => 'abc', 'iss' => 'https://evil.example']);
+    }
+
+    #[Test]
+    public function validate_authorization_response_issuer_honours_a_custom_issuer(): void
+    {
+        $provider = $this->provider([], ['issuer' => 'https://staging.thecolony.cc/']);
+        // The configured issuer is rtrim('/')-normalised, so the unslashed form must match.
+        $provider->validateAuthorizationResponseIssuer(['iss' => 'https://staging.thecolony.cc']);
+        self::assertTrue(true);
+    }
+
+    // -- front-channel logout: validateFrontChannelLogout ---------------------
+
+    #[Test]
+    public function validate_front_channel_logout_accepts_a_valid_iss_and_sid(): void
+    {
+        $provider = $this->provider([]);
+        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.cc', 'sid' => 'sess_42']);
+        self::assertTrue(true);   // no exception thrown
+    }
+
+    #[Test]
+    public function validate_front_channel_logout_rejects_a_missing_iss(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('missing iss');
+        $provider->validateFrontChannelLogout(['sid' => 'sess_42']);
+    }
+
+    #[Test]
+    public function validate_front_channel_logout_rejects_a_mismatched_iss(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('issuer mismatch');
+        $provider->validateFrontChannelLogout(['iss' => 'https://evil.example', 'sid' => 'sess_42']);
+    }
+
+    #[Test]
+    public function validate_front_channel_logout_rejects_a_missing_sid(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('missing sid');
+        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.cc']);
+    }
+
+    #[Test]
+    public function validate_front_channel_logout_rejects_an_empty_sid(): void
+    {
+        $provider = $this->provider([]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('missing sid');
+        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.cc', 'sid' => '']);
+    }
+
     // -- silent SSO ----------------------------------------------------------
 
     #[Test]
