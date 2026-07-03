@@ -97,6 +97,22 @@ final class IdTokenVerifierTest extends TestCase
     }
 
     #[Test]
+    public function it_rejects_azp_naming_another_client(): void
+    {
+        // OIDC Core §3.1.3.7(5): a present azp MUST be this client, even if aud lists us.
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('azp');
+        $this->verify(['aud' => ['colony_client_abc', 'attacker'], 'azp' => 'attacker']);
+    }
+
+    #[Test]
+    public function it_accepts_azp_that_matches_the_client(): void
+    {
+        $claims = $this->verify(['aud' => ['colony_client_abc', 'other'], 'azp' => 'colony_client_abc']);
+        self::assertSame('colony-sub-123', $claims['sub']);
+    }
+
+    #[Test]
     public function it_rejects_expired_token(): void
     {
         $this->expectException(ColonyOidcException::class);

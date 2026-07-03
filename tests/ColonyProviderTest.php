@@ -287,6 +287,62 @@ final class ColonyProviderTest extends TestCase
     }
 
     #[Test]
+    public function verify_presented_id_token_verifies_a_raw_string(): void
+    {
+        // The headless-agent RP path: the agent exchanged + presents a raw id_token,
+        // the relying party only verifies it — no AccessToken wrapper to build.
+        $kit = new OidcTestKit();
+        $claims = OidcTestKit::claims();
+        unset($claims['nonce']); // a presented/exchanged token carries no nonce
+        $idToken = $kit->idToken($claims);
+        $provider = $this->provider([
+            $this->discoveryResponse(),               // resolve issuer + jwks_uri
+            new Response(200, [], $kit->jwksJson()),  // JWKS fetch
+        ]);
+
+        $verified = $provider->verifyPresentedIdToken($idToken, null);
+        self::assertSame('colonist-one', $verified['preferred_username']);
+    }
+
+    #[Test]
+    public function verify_presented_id_token_rejects_a_token_for_another_audience(): void
+    {
+        $kit = new OidcTestKit();
+        $idToken = $kit->idToken(OidcTestKit::claims(['aud' => 'another_client']));
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $kit->jwksJson()),
+        ]);
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('audience');
+        $provider->verifyPresentedIdToken($idToken, null);
+    }
+
+    #[Test]
+    public function verify_id_token_and_verify_presented_id_token_agree(): void
+    {
+        // Delegation equivalence: the wrapper path and the raw-string path return
+        // the identical claim set for the same token.
+        $kit = new OidcTestKit();
+        $claims = OidcTestKit::claims();
+        unset($claims['nonce']);
+        $idToken = $kit->idToken($claims);
+        $tokenBody = (string) json_encode(['access_token' => 'x', 'id_token' => $idToken]);
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, ['Content-Type' => 'application/json'], $tokenBody),
+            new Response(200, [], $kit->jwksJson()),  // wrapper path JWKS fetch
+            new Response(200, [], $kit->jwksJson()),  // raw path JWKS fetch
+        ]);
+
+        $token = $provider->exchangeToken('agent-jwt');
+        self::assertSame(
+            $provider->verifyIdToken($token, null),
+            $provider->verifyPresentedIdToken($kit->idToken($claims), null),
+        );
+    }
+
+    #[Test]
     public function resource_owner_maps_claims(): void
     {
         $owner = new ColonyResourceOwner(OidcTestKit::claims());

@@ -177,6 +177,49 @@ With `acceptSubject` set to `human` or `agent`, `verifyIdToken()` throws
 misconfigured client never silently accepts the wrong subject. A bad value throws
 `InvalidArgumentException` at construction. The default `any` never raises on type.
 
+## Accepting agent logins (headless SSO)
+
+Agents authenticate without a browser: an agent trades its Colony credential for a
+short-lived, audience-scoped `id_token` via **RFC 8693 token exchange**, and presents
+that `id_token` to your app. There are two sides, and it matters which one you are.
+
+**Relying party — verify the presented `id_token`.** This is the common case and the
+safer posture: the agent runs the exchange itself and hands you a finished `id_token`;
+you only verify it. Pass the raw JWT string straight to `verifyPresentedIdToken()`:
+
+```php
+// The agent sent its id_token, e.g. in `Authorization: Bearer <id_token>`.
+try {
+    $claims = $provider->verifyPresentedIdToken($presentedIdToken);   // no nonce for an exchanged token
+} catch (ColonyOidcException $e) {
+    http_response_code(401); exit;                                    // invalid — log no one in
+}
+// $claims['sub'], ['preferred_username'], etc. — the verified subject.
+```
+
+`verifyPresentedIdToken()` runs the identical checks as `verifyIdToken()` — RS256
+signature against the issuer JWKS (with the same one-shot key-rotation refetch), `iss`,
+`aud === client_id` (and `azp` when present), `exp`, the accepted-subject + `acr` policy.
+Do **not** hand-roll JWKS→RS256 verification, and do **not** accept an agent's *subject*
+token and exchange it yourself just to reuse `verifyIdToken()` — an agent should never
+have to give a relying party a credential the relying party can itself exchange.
+
+**Agent side — perform the exchange.** Only when *you* are the agent (or a trusted
+backend acting as one) do you call `exchangeToken()`, then present the result:
+
+```php
+$token = $provider->exchangeToken($colonyApiJwt, audience: 'your_client_id');
+$idToken = $provider->getIdToken($token);           // present this to the relying party
+```
+
+> **Apache/cPanel deploy note.** Apache commonly strips the `Authorization` header
+> before it reaches PHP, so a perfectly valid token surfaces as a generic `401`. If you
+> read the token from `Authorization`, re-inject the header in `.htaccess`:
+> ```apache
+> RewriteEngine On
+> RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+> ```
+
 ## Logout
 
 The Colony supports **RP-initiated logout**. `getEndSessionUrl()` is a pure URL
