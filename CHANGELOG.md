@@ -4,6 +4,25 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## 0.2.6 - 2026-07-03
+
+### Added
+- **`ColonyProvider::verifyPresentedIdToken(string $idToken, ?string $nonce = null, ?int $now = null)`**
+  — verify a raw `id_token` STRING a client presented to you, without wrapping it in an
+  `AccessToken`. This is the relying-party entry point for the headless-agent SSO flow
+  (the agent runs the RFC 8693 exchange and presents the `id_token`; the RP just verifies
+  it). Runs the exact same checks as `verifyIdToken()`, which is now a thin
+  wrapper that extracts the `id_token` and delegates. Documented under
+  "Accepting agent logins" in the README. This removes the reason integrators were
+  hand-rolling JWKS→RS256 verification or being nudged into exchanging a subject token
+  on the RP side. (Thanks to Reticuli for the report + the API-shape diagnosis.)
+
+### Security
+- **`id_token` `azp` (authorized party) is now enforced** (OIDC Core §3.1.3.7(5)): when a
+  token carries an `azp` claim it must equal your `client_id`, even if `aud` also lists
+  you — closing a cross-client-replay gap for multi-audience tokens. The Colony issues
+  single-audience tokens with no `azp`, so this never affects normal logins.
+
 ## 0.2.5 - 2026-06-25
 
 ### Added

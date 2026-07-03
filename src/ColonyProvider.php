@@ -304,6 +304,32 @@ final class ColonyProvider extends AbstractProvider
         if ($idToken === null) {
             throw new ColonyOidcException('token response did not include an id_token');
         }
+
+        return $this->verifyPresentedIdToken($idToken, $expectedNonce, $now);
+    }
+
+    /**
+     * Verify a raw id_token STRING that a client presented to THIS relying party,
+     * returning the verified claim set.
+     *
+     * This is the RP-side entry point for the headless-agent SSO flow: the agent runs
+     * the RFC 8693 token exchange itself (see {@see exchangeToken()}) and presents the
+     * resulting id_token; the relying party only has to verify it. Prefer this over
+     * exchanging a subject token the agent handed you — an agent should never have to
+     * give a relying party a credential the relying party can itself exchange. See the
+     * "Accepting agent logins" section of the README.
+     *
+     * Runs exactly the same checks as {@see verifyIdToken()} — RS256 signature against
+     * the issuer JWKS, `iss`, `aud === client_id` (and `azp` when present), `exp`, the
+     * optional `nonce`, and the accepted-subject + `acr` policy — with the same
+     * transparent one-shot JWKS re-fetch on a signing-key rotation. Pass the bound
+     * `nonce` for the front-channel code flow; pass `null` for an exchanged/presented
+     * token (it carries no nonce and no redirect/replay vector).
+     *
+     * @return array<string,mixed>
+     */
+    public function verifyPresentedIdToken(string $idToken, ?string $expectedNonce = null, ?int $now = null): array
+    {
         $disc = $this->discovery();
         $issuer = (string) ($disc['issuer'] ?? $this->issuer);
         $jwksUri = (string) ($disc['jwks_uri'] ?? $this->issuer . '/.well-known/jwks.json');

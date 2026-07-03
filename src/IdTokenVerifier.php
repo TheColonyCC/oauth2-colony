@@ -80,6 +80,14 @@ final class IdTokenVerifier
         if (!$audOk) {
             throw new ColonyOidcException('id_token audience mismatch');
         }
+        // OIDC Core §3.1.3.7(5): when the `azp` (authorized party) claim is present it
+        // identifies the party the token was issued FOR and MUST be this client — even
+        // when `aud` also lists other audiences. The Colony IdP issues single-audience
+        // tokens with no azp, so this only ever rejects a token deliberately authorized
+        // to a different client (a cross-client replay against this relying party).
+        if (isset($claims['azp']) && $claims['azp'] !== $clientId) {
+            throw new ColonyOidcException('id_token azp mismatch');
+        }
         if (!isset($claims['exp']) || $now > ((int) $claims['exp'] + self::LEEWAY_SECONDS)) {
             throw new ColonyOidcException('id_token expired');
         }
