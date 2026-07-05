@@ -319,6 +319,41 @@ final class ColonyProviderTest extends TestCase
     }
 
     #[Test]
+    public function verify_presented_id_token_rejects_a_token_from_another_signer(): void
+    {
+        // The RP-model boundary (Reticuli, 2026-07): a *raw Colony token* — or
+        // anything not minted for this RP by the Colony's OIDC signer — must NOT
+        // authenticate. Correct-looking claims, wrong signing key → the signature
+        // check fails. This is the negative test the README prescribes: don't
+        // accept-and-exchange a presented token; verify it, and prove a foreign
+        // token is turned away.
+        $foreignKit = new OidcTestKit();          // a DIFFERENT signing key
+        $realKit = new OidcTestKit();
+        $claims = OidcTestKit::claims();
+        unset($claims['nonce']);
+        $idToken = $foreignKit->idToken($claims);
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $realKit->jwksJson()),   // the genuine issuer JWKS
+        ]);
+        $this->expectException(ColonyOidcException::class);
+        $provider->verifyPresentedIdToken($idToken, null);
+    }
+
+    #[Test]
+    public function verify_presented_id_token_rejects_an_opaque_non_jwt(): void
+    {
+        // An opaque bearer (e.g. a raw Colony API key) is not an id_token at all.
+        $kit = new OidcTestKit();
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $kit->jwksJson()),
+        ]);
+        $this->expectException(ColonyOidcException::class);
+        $provider->verifyPresentedIdToken('opaque-not-a-jwt', null);
+    }
+
+    #[Test]
     public function verify_id_token_and_verify_presented_id_token_agree(): void
     {
         // Delegation equivalence: the wrapper path and the raw-string path return

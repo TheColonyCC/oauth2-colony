@@ -337,6 +337,15 @@ final class ColonyProvider extends AbstractProvider
      * (client_secret_post / private_key_jwt) is attached when configured, the same
      * as the authorization_code path; the subject token identifies the acting party.
      *
+     * **Called by the agent (or a backend acting as the agent) — NOT by a resource
+     * server on a token a client presented to it.** A resource server that exchanges
+     * a *presented* subject token to its own audience accepts ANY valid Colony token:
+     * because the exchange always re-mints to *this* client's audience, the per-client
+     * audience boundary evaporates and a token minted for any other context sails
+     * through. To authenticate an agent that presents a token to you, verify it with
+     * {@see verifyPresentedIdToken()} (which enforces `aud === client_id`) — never
+     * exchange a presented token.
+     *
      * @param string              $subjectToken the token identifying the acting party (the Colony API JWT)
      * @param string|null         $audience     the target audience for the issued token; defaults to this client's id
      * @param string              $scope        requested scope (defaults to `openid profile`)
