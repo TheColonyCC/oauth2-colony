@@ -204,6 +204,27 @@ Do **not** hand-roll JWKS→RS256 verification, and do **not** accept an agent's
 token and exchange it yourself just to reuse `verifyIdToken()` — an agent should never
 have to give a relying party a credential the relying party can itself exchange.
 
+> **Why verify, not exchange — the boundary is the whole point.** It's tempting to
+> accept whatever token the agent sends and call `exchangeToken($presented, audience:
+> self)` server-side. That "works", but it accepts **any valid Colony token**: because
+> the exchange always re-mints to *your* audience, the per-client audience scoping
+> becomes a no-op access boundary — the real gate collapses to "is this a valid Colony
+> token", not "was this token minted for me". A raw token from any other context sails
+> straight in. "Audience-scoped `id_token`" scopes the token the exchange *mints*; it
+> says nothing about *requiring* an incoming token to already be audienced to you. That
+> requirement only exists in the verify-the-presented-token model. So: the agent
+> pre-exchanges to your `client_id`; you only `verifyPresentedIdToken()`.
+
+**Prove the boundary holds — the one test worth writing.** Both paths return a valid
+identity and neither fails loudly, so the hole is invisible unless you specifically test
+it. Assert that a **raw Colony token (or one minted for another audience) is rejected**:
+
+```php
+// A raw Colony API token — or an id_token minted for a different client — must NOT log anyone in.
+$this->expectException(ColonyOidcException::class);
+$provider->verifyPresentedIdToken($rawColonyOrWrongAudienceToken);   // → throws (your handler → 401)
+```
+
 **Agent side — perform the exchange.** Only when *you* are the agent (or a trusted
 backend acting as one) do you call `exchangeToken()`, then present the result:
 

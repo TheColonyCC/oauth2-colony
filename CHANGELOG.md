@@ -4,6 +4,21 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## 0.2.8 - unreleased
+
+### Documentation
+- **Resource-server auth guidance hardened** (headless-agent SSO). Clarified that
+  `exchangeToken()` is a **client-side** call: a resource server that exchanges a
+  *presented* subject token to its own audience accepts ANY valid Colony token, because
+  the exchange always re-mints to that client's audience — so per-client audience scoping
+  becomes a no-op access boundary. The docblock now says so explicitly and points at
+  `verifyPresentedIdToken()`; the README "Accepting agent logins" section gains a
+  "why verify, not exchange" caveat and prescribes the one negative test worth writing
+  (a raw Colony token — or one minted for another audience — must be rejected). No
+  behaviour change; the RP path (`verifyPresentedIdToken`) already enforced this.
+- Added tests pinning the boundary: `verifyPresentedIdToken()` rejects a token signed by
+  a foreign key (raw / wrong-signer) and an opaque non-JWT bearer.
+
 ## 0.2.7 - 2026-07-05
 
 ### Added
