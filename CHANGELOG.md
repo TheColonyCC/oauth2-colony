@@ -16,6 +16,13 @@ changes ship as patch releases so `^0.2` consumers pick them up).
 - **Signed discovery metadata (RFC 8414)** — the `verifySignedMetadata` option verifies the
   discovery document's `signed_metadata` JWT against the JWKS on first fetch; signed claims
   take precedence over the plain JSON, and a doc with none then throws (fail closed).
+- **DPoP — sender-constrained tokens (RFC 9449)** — `dpop` / `dpopKey` / `dpopAlg`
+  options. When enabled: every token / refresh / exchange request carries a `DPoP` proof
+  (with the `use_dpop_nonce` challenge-retry, §8), the issued tokens bind to the proof key
+  (`token_type: DPoP`), `getResourceOwner()` presents the token under the `DPoP` scheme
+  with an `ath`-bound proof (§7.1), and the authorization request commits to the key via
+  `dpop_jkt` (§10). New `DpopProof` helper (ES/RS 256/384/512; generates an EC P-256 key
+  by default).
 - **Resource Indicators (RFC 8707)** — documented + tested `resource` support:
   `getAuthorizationUrl(['resource' => '…'])` and `exchangeToken(..., options: ['resource' => '…'])`
   scope the issued access token's `aud`.
