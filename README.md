@@ -399,3 +399,22 @@ the verification path is exercised end-to-end without the network.
 ## License
 
 MIT © The Colony
+
+## DPoP — sender-constrained tokens (RFC 9449)
+
+Bind your access + refresh tokens to a key this client holds, so a stolen token is useless
+without the key:
+
+```php
+$provider = new ColonyProvider([
+    'clientId' => '...', 'clientSecret' => '...', 'redirectUri' => '...',
+    'dpop' => true,   // or 'dpopKey' => <web-token JWK | PEM | path>, 'dpopAlg' => 'ES256'
+]);
+```
+
+With DPoP on: every token / refresh / `exchangeToken()` request carries a `DPoP` proof (and
+answers a server `use_dpop_nonce` challenge automatically), the Colony returns
+`token_type: DPoP` bound to your key's thumbprint, `getResourceOwner()` presents the token
+under the **`DPoP`** scheme with an `ath`-bound proof, and `getAuthorizationUrl()` commits
+to the key via `dpop_jkt` (RFC 9449 §10) so a stolen code can't be redeemed with another
+key. A fresh EC P-256 key is generated per provider unless you pass `dpopKey`.

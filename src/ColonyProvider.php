@@ -9,9 +9,11 @@ use Jose\Component\Core\JWK;
 use Jose\Component\KeyManagement\JWKFactory;
 use Jose\Component\Signature\JWSBuilder;
 use Jose\Component\Signature\Serializer\CompactSerializer;
+use GuzzleHttp\Exception\BadResponseException;
 use League\OAuth2\Client\Provider\AbstractProvider;
 use League\OAuth2\Client\Provider\Exception\IdentityProviderException;
 use League\OAuth2\Client\Token\AccessToken;
+use League\OAuth2\Client\Token\AccessTokenInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\SimpleCache\CacheInterface;
@@ -78,6 +80,19 @@ final class ColonyProvider extends AbstractProvider
      */
     protected bool $verifySignedMetadata = false;
 
+    /**
+     * DPoP (RFC 9449) — sender-constrain the issued tokens to a key this client holds.
+     * `dpop` true (or a supplied `dpopKey`) turns it on: every token / refresh request
+     * carries a `DPoP` proof, the Colony returns `token_type: "DPoP"` bound to the key's
+     * thumbprint, `getResourceOwner()` presents the token under the `DPoP` scheme, and the
+     * authorization request commits to the key via `dpop_jkt` (RFC 9449 §10).
+     */
+    protected bool $dpop = false;
+    /** A web-token JWK, a PEM string, a PEM file path, or null to generate a fresh key. */
+    protected mixed $dpopKey = null;
+    /** DPoP proof signing algorithm (ES/RS 256/384/512; default ES256, the EC P-256 default). */
+    protected string $dpopAlg = 'ES256';
+
     /** Client auth methods this provider implements at the token / PAR endpoints. */
     private const TOKEN_AUTH_METHODS = ['client_secret_post', 'private_key_jwt'];
     /** RFC 7521 §4.2 client-assertion type for private_key_jwt. */
@@ -97,6 +112,10 @@ final class ColonyProvider extends AbstractProvider
     private IdTokenVerifier $idTokenVerifier;
     /** @var array<string,mixed>|null */
     private ?array $discoveryMemo = null;
+    private bool $dpopEnabled = false;
+    private ?DpopProof $dpopProof = null;
+    /** Most recent server-issued DPoP nonce (RFC 9449 §8/§9), cached for the next proof. */
+    private ?string $dpopNonce = null;
 
     /**
      * @param array<string,mixed> $options
@@ -131,6 +150,12 @@ final class ColonyProvider extends AbstractProvider
         // that's instantiated while the login is still dormant/unconfigured; like league's
         // default it constructs fine and only an actual token request needs the secret.
         $this->idTokenVerifier = $collaborators['idTokenVerifier'] ?? new IdTokenVerifier();
+
+        // DPoP (RFC 9449): build the proof key up front when enabled (or a key was supplied).
+        $this->dpopEnabled = $this->dpop || $this->dpopKey !== null;
+        if ($this->dpopEnabled) {
+            $this->dpopProof = DpopProof::fromOption($this->dpopKey, $this->dpopAlg);
+        }
     }
 
     // -- league endpoints (resolved from OIDC discovery) ----------------------
@@ -182,6 +207,50 @@ final class ColonyProvider extends AbstractProvider
         return new ColonyResourceOwner($response);
     }
 
+    /**
+     * Fetch the UserInfo claims. With DPoP enabled the access token is sender-constrained,
+     * so it is presented under the `DPoP` auth scheme (RFC 9449 §7.1) with a proof carrying
+     * `ath` bound to the token — and a resource-server `use_dpop_nonce` challenge (§9) is
+     * answered once. Without DPoP this is league's standard Bearer fetch.
+     */
+    public function getResourceOwner(AccessToken $token): ColonyResourceOwner
+    {
+        if (!$this->dpopEnabled || $this->dpopProof === null) {
+            /** @var ColonyResourceOwner $owner */
+            $owner = parent::getResourceOwner($token);
+
+            return $owner;
+        }
+        $url = $this->getResourceOwnerDetailsUrl($token);
+        $accessToken = $token->getToken();
+        $send = function () use ($url, $accessToken): ResponseInterface {
+            $request = $this->getRequest('GET', $url, ['headers' => [
+                'Authorization' => 'DPoP ' . $accessToken,
+                'DPoP' => $this->dpopProof->proof('GET', $url, $accessToken, $this->dpopNonce),
+                'Accept' => 'application/json',
+            ]]);
+            try {
+                return $this->getResponse($request);
+            } catch (BadResponseException $e) {
+                return $e->getResponse();
+            }
+        };
+        $response = $send();
+        if ($response->getStatusCode() === 401 && $this->isUseDpopNonce($response)) {
+            $this->rememberDpopNonce($response);
+            $response = $send();
+        }
+        $this->rememberDpopNonce($response);
+
+        $parsed = $this->parseResponse($response);
+        $this->checkResponse($response, $parsed);
+        if (!is_array($parsed)) {
+            throw new ColonyOidcException('unexpected userinfo response (not a JSON object)');
+        }
+
+        return $this->createResourceOwner($parsed, $token);
+    }
+
     // -- OIDC: nonce ----------------------------------------------------------
 
     protected function getAuthorizationParameters(array $options): array
@@ -196,6 +265,12 @@ final class ColonyProvider extends AbstractProvider
         // through $options untouched.
         if ($this->requireAcr !== null && !isset($params['acr_values'])) {
             $params['acr_values'] = $this->requireAcr;
+        }
+        // RFC 9449 §10: commit to the DPoP proof key's thumbprint so the Colony binds the
+        // issued code to it — a stolen code can't be redeemed with a different key. The
+        // token request proves the same key, so the binding is satisfied for free.
+        if ($this->dpopEnabled && $this->dpopProof !== null && !isset($params['dpop_jkt'])) {
+            $params['dpop_jkt'] = $this->dpopProof->thumbprint();
         }
 
         return $params;
@@ -281,15 +356,10 @@ final class ColonyProvider extends AbstractProvider
         ], static fn ($v): bool => $v !== null && $v !== '');
         $params = array_merge($params, $options);
 
-        // getAccessTokenRequest() (overridden here) attaches client auth and posts
-        // to the discovered token endpoint; getParsedResponse() runs checkResponse()
-        // so OAuth error bodies surface as IdentityProviderException, as elsewhere.
-        $response = $this->getParsedResponse($this->getAccessTokenRequest($params));
-        if (!is_array($response)) {
-            throw new ColonyOidcException('unexpected token-exchange response (not a JSON object)');
-        }
-
-        return new AccessToken($response);
+        // getParsedTokenResponse() attaches client auth + (when enabled) a DPoP proof with
+        // the nonce-challenge retry, and runs checkResponse() so OAuth error bodies surface
+        // as IdentityProviderException, as elsewhere.
+        return new AccessToken($this->getParsedTokenResponse($params));
     }
 
     /**
@@ -683,7 +753,116 @@ final class ColonyProvider extends AbstractProvider
      */
     protected function getAccessTokenRequest(array $params): RequestInterface
     {
-        return parent::getAccessTokenRequest($this->applyClientAuth($params));
+        $request = parent::getAccessTokenRequest($this->applyClientAuth($params));
+        // DPoP (RFC 9449 §5): bind the request to the proof key. htu is the token
+        // endpoint (the built request's URI); the nonce (if the server has issued one)
+        // rides the proof. A fresh proof is minted per call, so a retry re-signs.
+        if ($this->dpopEnabled && $this->dpopProof !== null) {
+            $request = $request->withHeader(
+                'DPoP',
+                $this->dpopProof->proof('POST', (string) $request->getUri(), null, $this->dpopNonce),
+            );
+        }
+
+        return $request;
+    }
+
+    /**
+     * Send a token-endpoint request and return the parsed body, transparently answering a
+     * DPoP `use_dpop_nonce` challenge (RFC 9449 §8): on a `400 use_dpop_nonce` carrying a
+     * `DPoP-Nonce` header, cache the nonce and retry once with it embedded in a fresh proof.
+     * Non-DPoP requests take league's normal `getParsedResponse()` path.
+     *
+     * @param array<string,mixed> $params
+     * @return array<string,mixed>
+     */
+    private function getParsedTokenResponse(array $params): array
+    {
+        if (!$this->dpopEnabled) {
+            $parsed = $this->getParsedResponse($this->getAccessTokenRequest($params));
+            if (!is_array($parsed)) {
+                throw new ColonyOidcException('unexpected token response (not a JSON object)');
+            }
+
+            return $parsed;
+        }
+
+        $send = function () use ($params): ResponseInterface {
+            try {
+                return $this->getResponse($this->getAccessTokenRequest($params));
+            } catch (BadResponseException $e) {
+                return $e->getResponse();
+            }
+        };
+        $response = $send();
+        if ($response->getStatusCode() === 400 && $this->isUseDpopNonce($response)) {
+            $this->rememberDpopNonce($response);
+            $response = $send();
+        }
+        $this->rememberDpopNonce($response);
+
+        $parsed = $this->parseResponse($response);
+        $this->checkResponse($response, $parsed);
+        if (!is_array($parsed)) {
+            throw new ColonyOidcException('unexpected token response (not a JSON object)');
+        }
+
+        return $parsed;
+    }
+
+    /** True when `$response` is a DPoP `use_dpop_nonce` challenge (RFC 9449 §8/§9). */
+    private function isUseDpopNonce(ResponseInterface $response): bool
+    {
+        if (str_contains($response->getHeaderLine('WWW-Authenticate'), 'use_dpop_nonce')) {
+            return true;
+        }
+        $body = json_decode((string) $response->getBody(), true);
+
+        return is_array($body) && ($body['error'] ?? null) === 'use_dpop_nonce';
+    }
+
+    /** Cache a server-issued `DPoP-Nonce` (RFC 9449 §8) for the next proof, if present. */
+    private function rememberDpopNonce(ResponseInterface $response): void
+    {
+        $nonce = $response->getHeaderLine('DPoP-Nonce');
+        if ($nonce !== '') {
+            $this->dpopNonce = $nonce;
+        }
+    }
+
+    /**
+     * Exchange an authorization `code` (or refresh token) for tokens. With DPoP enabled the
+     * request carries a proof and answers a `use_dpop_nonce` challenge, so the issued
+     * access + refresh tokens are sender-constrained to the proof key (`token_type: DPoP`).
+     * Without DPoP this is league's standard behaviour.
+     *
+     * @param mixed               $grant
+     * @param array<string,mixed> $options
+     */
+    public function getAccessToken($grant, array $options = []): AccessTokenInterface
+    {
+        if (!$this->dpopEnabled) {
+            return parent::getAccessToken($grant, $options);
+        }
+        // Faithful mirror of AbstractProvider::getAccessToken(), swapping the plain send
+        // for the DPoP nonce-aware one so we can constrain the issued tokens.
+        $grant = $this->verifyGrant($grant);
+        if (isset($options['scope']) && is_array($options['scope'])) {
+            $options['scope'] = implode($this->getScopeSeparator(), $options['scope']);
+        }
+        $params = [
+            'client_id' => $this->clientId,
+            'client_secret' => $this->clientSecret,
+            'redirect_uri' => $this->redirectUri,
+        ];
+        if (!empty($this->pkceCode)) {
+            $params['code_verifier'] = $this->pkceCode;
+        }
+        $params = $grant->prepareRequestParameters($params, $options);
+        $response = $this->getParsedTokenResponse($params);
+        $prepared = $this->prepareAccessTokenResponse($response);
+
+        return $this->createAccessToken($prepared, $grant);
     }
 
     /**
