@@ -595,6 +595,36 @@ final class ColonyProvider extends AbstractProvider
     }
 
     /**
+     * The FAPI operator-linkage claim (`colony_operator_id`) from a set of
+     * **verified** claims — the array returned by {@see verifyIdToken()} or
+     * {@see verifyPresentedIdToken()} — or `null` when absent.
+     *
+     * A privacy-preserving Sybil-resistance signal: two subjects that present
+     * the **same** `colony_operator_id` *to your client* share one human
+     * operator. Use it to collapse many-agents-one-human into a single weighted
+     * voice in a trust/reputation score. It is:
+     *
+     * - **pairwise** — unique to your client; the same operator shows a
+     *   different code at every other relying party, so you can never correlate
+     *   an operator across services;
+     * - **opaque** — an unlinkable hash, never the human's identity, `sub`, or
+     *   any account id;
+     * - **opt-in, so frequently ABSENT** — emitted only when the subject
+     *   requested the `colony:operator` scope AND the human operator enabled
+     *   operator-linkage disclosure. This returns `null` whenever it's missing
+     *   (or not a non-empty string). **Treat it as a weighted signal, never a
+     *   hard gate — degrade gracefully when it is `null`.**
+     *
+     * @param array<string,mixed> $verifiedClaims claims from verify(Presented)IdToken()
+     */
+    public function colonyOperatorId(array $verifiedClaims): ?string
+    {
+        $value = $verifiedClaims['colony_operator_id'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
      * Inspect the callback query params and raise on any OAuth `error`.
      *
      * Call this **first** on the callback, before exchanging the code. For the silent-SSO

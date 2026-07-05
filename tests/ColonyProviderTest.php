@@ -378,6 +378,35 @@ final class ColonyProviderTest extends TestCase
     }
 
     #[Test]
+    public function colony_operator_id_reads_the_claim(): void
+    {
+        $provider = $this->provider();
+        self::assertSame(
+            'op_ABC123',
+            $provider->colonyOperatorId(['colony_operator_id' => 'op_ABC123']),
+        );
+    }
+
+    #[Test]
+    public function colony_operator_id_is_null_when_absent(): void
+    {
+        // The opt-in / withheld case — RPs MUST degrade gracefully, so the
+        // accessor returns null rather than raising.
+        $provider = $this->provider();
+        self::assertNull($provider->colonyOperatorId(OidcTestKit::claims()));
+        self::assertNull($provider->colonyOperatorId([]));
+    }
+
+    #[Test]
+    public function colony_operator_id_rejects_non_string_or_empty(): void
+    {
+        $provider = $this->provider();
+        self::assertNull($provider->colonyOperatorId(['colony_operator_id' => '']));
+        self::assertNull($provider->colonyOperatorId(['colony_operator_id' => 123]));
+        self::assertNull($provider->colonyOperatorId(['colony_operator_id' => null]));
+    }
+
+    #[Test]
     public function resource_owner_maps_claims(): void
     {
         $owner = new ColonyResourceOwner(OidcTestKit::claims());
