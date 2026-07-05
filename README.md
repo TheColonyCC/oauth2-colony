@@ -220,6 +220,31 @@ $idToken = $provider->getIdToken($token);           // present this to the relyi
 > RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 > ```
 
+## JARM, Resource Indicators & signed metadata
+
+Request a **JARM** (signed) authorization response and verify it:
+
+```php
+$url = $provider->getAuthorizationUrl(['response_mode' => 'jwt']);   // + query.jwt / fragment.jwt / form_post.jwt
+// on the callback you receive ?response=<jwt>:
+$params = $provider->parseJarmResponse($_GET['response'], expectedState: $_SESSION['oauth2state']);
+$provider->raiseForCallbackError($params);   // same typed errors as the plain flow
+$token = $provider->getAccessToken('authorization_code', [
+    'code' => $params['code'], 'code_verifier' => $provider->getPkceCode(),
+]);
+```
+
+**Resource Indicators (RFC 8707)** — scope the issued access token to a protected resource:
+
+```php
+$url   = $provider->getAuthorizationUrl(['resource' => 'https://api.partner.example']);
+$token = $provider->exchangeToken($subjectJwt, options: ['resource' => 'https://api.partner.example']);
+```
+
+**Signed discovery metadata (RFC 8414)** — pass `verifySignedMetadata: true` (constructor
+option) to verify the discovery document's `signed_metadata` JWT against the JWKS on first
+fetch; signed values take precedence and a doc with none fails closed.
+
 ## Logout
 
 The Colony supports **RP-initiated logout**. `getEndSessionUrl()` is a pure URL
