@@ -4,6 +4,22 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## 0.2.7 - unreleased
+
+### Added
+- **JARM** — `ColonyProvider::parseJarmResponse(string $responseJwt, ?string $expectedState = null)`
+  verifies + unpacks a JWT Secured Authorization Response (request it with
+  `getAuthorizationUrl(['response_mode' => 'jwt'])`). RS256 signature against the issuer
+  JWKS, `iss` / `aud` / `exp` checks (the `iss` claim is JARM's mix-up defence), optional
+  `state`; returns the inner `code`+`state` (or `error`) params for the normal flow. Same
+  one-shot JWKS re-fetch on key rotation as the id_token path.
+- **Signed discovery metadata (RFC 8414)** — the `verifySignedMetadata` option verifies the
+  discovery document's `signed_metadata` JWT against the JWKS on first fetch; signed claims
+  take precedence over the plain JSON, and a doc with none then throws (fail closed).
+- **Resource Indicators (RFC 8707)** — documented + tested `resource` support:
+  `getAuthorizationUrl(['resource' => '…'])` and `exchangeToken(..., options: ['resource' => '…'])`
+  scope the issued access token's `aud`.
+
 ## 0.2.6 - 2026-07-03
 
 ### Added

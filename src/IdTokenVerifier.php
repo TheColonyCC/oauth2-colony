@@ -174,6 +174,116 @@ final class IdTokenVerifier
         return $claims;
     }
 
+    /**
+     * Verify a JARM (JWT Secured Authorization Response) `response` JWT and return the
+     * inner authorization-response parameters.
+     *
+     * RS256 signature against the issuer JWKS, plus `iss` / `aud` / `exp` (the `iss`
+     * **claim** is JARM's mix-up defence, in place of the RFC 9207 `iss` *parameter*).
+     * When `$expectedState` is given it must equal the response's `state`. Returns the
+     * inner params (`code`+`state`, or `error`+`error_description`) with the JARM envelope
+     * (`iss`/`aud`/`exp`/`iat`/`nbf`) stripped.
+     *
+     * @param string $jwksJson Raw JWKS document (the issuer's signing keys).
+     * @return array<string,mixed>
+     */
+    public function verifyJarm(
+        string $responseJwt,
+        string $jwksJson,
+        string $issuer,
+        string $clientId,
+        ?string $expectedState = null,
+        ?int $now = null,
+    ): array {
+        $now ??= time();
+
+        try {
+            $jws = $this->serializer->unserialize($responseJwt);
+        } catch (\Throwable $e) {
+            throw new ColonyOidcException('unparseable JARM response', 0, $e);
+        }
+
+        $header = $jws->getSignature(0)->getProtectedHeader();
+        if (($header['alg'] ?? null) !== 'RS256') {
+            throw new ColonyOidcException('unsupported JARM response alg (expected RS256)');
+        }
+        if (!$this->verifier->verifyWithKeySet($jws, $this->keySet($jwksJson), 0)) {
+            throw new ColonyOidcException('JARM response signature does not verify');
+        }
+
+        /** @var array<string,mixed> $claims */
+        $claims = json_decode((string) $jws->getPayload(), true);
+        if (!is_array($claims)) {
+            throw new ColonyOidcException('JARM response payload is not a JSON object');
+        }
+        if (($claims['iss'] ?? null) !== $issuer) {
+            throw new ColonyOidcException('JARM response issuer mismatch');
+        }
+        $aud = $claims['aud'] ?? null;
+        $audOk = is_array($aud) ? in_array($clientId, $aud, true) : $aud === $clientId;
+        if (!$audOk) {
+            throw new ColonyOidcException('JARM response audience mismatch');
+        }
+        if (!isset($claims['exp']) || $now > ((int) $claims['exp'] + self::LEEWAY_SECONDS)) {
+            throw new ColonyOidcException('JARM response expired');
+        }
+        if ($expectedState !== null && ($claims['state'] ?? null) !== $expectedState) {
+            throw new ColonyOidcException('JARM response state mismatch');
+        }
+
+        foreach (['iss', 'aud', 'exp', 'iat', 'nbf'] as $envelope) {
+            unset($claims[$envelope]);
+        }
+
+        return $claims;
+    }
+
+    /**
+     * Verify the discovery document's `signed_metadata` JWT (RFC 8414 §2.1/§3.2) and
+     * return its signed claims.
+     *
+     * The JWT is RS256-signed with the same key as the id_tokens; its `iss` claim must
+     * equal the issuer. There is no `aud` or `exp`. Callers merge the returned claims over
+     * the plain-JSON discovery, letting them take precedence per §3.2.
+     *
+     * @param string $jwksJson Raw JWKS document (the issuer's signing keys).
+     * @return array<string,mixed>
+     */
+    public function verifySignedMetadata(
+        string $signedMetadata,
+        string $jwksJson,
+        string $issuer,
+    ): array {
+        try {
+            $jws = $this->serializer->unserialize($signedMetadata);
+        } catch (\Throwable $e) {
+            throw new ColonyOidcException('unparseable signed_metadata', 0, $e);
+        }
+
+        $header = $jws->getSignature(0)->getProtectedHeader();
+        if (($header['alg'] ?? null) !== 'RS256') {
+            throw new ColonyOidcException('unsupported signed_metadata alg (expected RS256)');
+        }
+        if (!$this->verifier->verifyWithKeySet($jws, $this->keySet($jwksJson), 0)) {
+            throw new ColonyOidcException('signed_metadata signature does not verify');
+        }
+
+        /** @var array<string,mixed> $claims */
+        $claims = json_decode((string) $jws->getPayload(), true);
+        if (!is_array($claims)) {
+            throw new ColonyOidcException('signed_metadata payload is not a JSON object');
+        }
+        if (($claims['iss'] ?? null) !== $issuer) {
+            throw new ColonyOidcException('signed_metadata issuer mismatch');
+        }
+        // §3.2: the signed payload MUST NOT itself carry a signed_metadata member.
+        if (array_key_exists('signed_metadata', $claims)) {
+            throw new ColonyOidcException('signed_metadata must not contain a nested signed_metadata');
+        }
+
+        return $claims;
+    }
+
     private function keySet(string $jwksJson): JWKSet
     {
         $data = json_decode($jwksJson, true);

@@ -70,6 +70,14 @@ final class ColonyProvider extends AbstractProvider
     /** Push the authorization request server-side (RFC 9126) for every authorization URL. */
     protected bool $usePar = false;
 
+    /**
+     * When true, the discovery document's `signed_metadata` JWT (RFC 8414 §2.1/§3.2) is
+     * verified against the published JWKS on first fetch and its signed claims take
+     * precedence over the plain JSON — so a doc fetched over a hostile network is proven
+     * un-tampered. A discovery doc with no `signed_metadata` then throws (fail closed).
+     */
+    protected bool $verifySignedMetadata = false;
+
     /** Client auth methods this provider implements at the token / PAR endpoints. */
     private const TOKEN_AUTH_METHODS = ['client_secret_post', 'private_key_jwt'];
     /** RFC 7521 §4.2 client-assertion type for private_key_jwt. */
@@ -360,6 +368,54 @@ final class ColonyProvider extends AbstractProvider
         $this->assertAcrSatisfied($claims);
 
         return $claims;
+    }
+
+    /**
+     * Verify + unpack a JARM (JWT Secured Authorization Response) `response` parameter.
+     *
+     * When you request `response_mode=jwt` (or query.jwt / fragment.jwt / form_post.jwt) —
+     * pass `['response_mode' => 'jwt']` to {@see getAuthorizationUrl()} — the Colony returns
+     * the whole authorization response as a single signed JWT in the `response` parameter.
+     * Pass that JWT here: its RS256 signature is verified against the issuer JWKS and its
+     * `iss` / `aud` / `exp` claims are checked (the `iss` **claim** is JARM's mix-up defence,
+     * replacing the RFC 9207 `iss` *parameter*, which JARM omits). Returns the inner
+     * authorization-response params (`code`+`state` on success, or `error`+`error_description`
+     * on failure) with the JARM envelope stripped — feed them to {@see raiseForCallbackError()}
+     * and then the normal `getAccessToken('authorization_code', ...)` flow.
+     *
+     * Pass `$expectedState` (the value from {@see getState()}) to have `state` checked here.
+     * Uses the same transparent one-shot JWKS re-fetch on a signing-key rotation as
+     * {@see verifyIdToken()}.
+     *
+     * @return array<string,mixed>
+     */
+    public function parseJarmResponse(string $responseJwt, ?string $expectedState = null, ?int $now = null): array
+    {
+        $disc = $this->discovery();
+        $issuer = (string) ($disc['issuer'] ?? $this->issuer);
+        $jwksUri = (string) ($disc['jwks_uri'] ?? $this->issuer . '/.well-known/jwks.json');
+        $cacheKey = 'colony_oidc_jwks_' . sha1($jwksUri);
+
+        try {
+            return $this->idTokenVerifier->verifyJarm(
+                $responseJwt,
+                $this->cached($cacheKey, fn () => $this->httpGet($jwksUri)),
+                $issuer,
+                (string) $this->clientId,
+                $expectedState,
+                $now,
+            );
+        } catch (ColonyOidcException $e) {
+            if ($this->cache === null || !str_contains($e->getMessage(), 'signature')) {
+                throw $e;
+            }
+            $fresh = $this->httpGet($jwksUri);
+            $this->cache->set($cacheKey, $fresh, $this->cacheTtl);
+
+            return $this->idTokenVerifier->verifyJarm(
+                $responseJwt, $fresh, $issuer, (string) $this->clientId, $expectedState, $now,
+            );
+        }
     }
 
     /**
@@ -790,7 +846,38 @@ final class ColonyProvider extends AbstractProvider
             throw new ColonyOidcException('OIDC discovery document is not valid JSON');
         }
 
-        return $this->discoveryMemo = $data;
+        // Memoise first so the JWKS lookup in applySignedMetadata() doesn't re-enter
+        // discovery() and recurse; then let the verified/merged doc replace it.
+        $this->discoveryMemo = $data;
+        if ($this->verifySignedMetadata) {
+            $this->discoveryMemo = $this->applySignedMetadata($data);
+        }
+
+        return $this->discoveryMemo;
+    }
+
+    /**
+     * Verify the discovery `signed_metadata` JWT (RFC 8414) against the issuer JWKS and
+     * return the document with its signed claims merged in (signed values take precedence).
+     * Throws {@see ColonyOidcException} when there is no `signed_metadata`, or on a bad
+     * signature / issuer.
+     *
+     * @param array<string,mixed> $doc
+     * @return array<string,mixed>
+     */
+    private function applySignedMetadata(array $doc): array
+    {
+        $raw = $doc['signed_metadata'] ?? null;
+        if (!is_string($raw) || $raw === '') {
+            throw new ColonyOidcException(
+                'verifySignedMetadata is set but discovery has no signed_metadata (RFC 8414 §2.1)',
+            );
+        }
+        $jwksUri = (string) ($doc['jwks_uri'] ?? $this->issuer . '/.well-known/jwks.json');
+        $jwksJson = $this->cached('colony_oidc_jwks_' . sha1($jwksUri), fn () => $this->httpGet($jwksUri));
+        $signed = $this->idTokenVerifier->verifySignedMetadata($raw, $jwksJson, $this->issuer);
+
+        return array_merge($doc, $signed, ['signed_metadata' => $raw]);
     }
 
     private function endpoint(string $key, string $fallbackPath): string
