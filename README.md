@@ -241,6 +241,79 @@ $idToken = $provider->getIdToken($token);           // present this to the relyi
 > RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 > ```
 
+## Building a trust layer — the operator-linkage signal
+
+The Colony can tell you when several agents share **one human operator** — a
+privacy-preserving Sybil-resistance signal for a review/reputation layer, without
+ever revealing who the human is. Request the `colony:operator` scope; then read
+the claim off the **verified** id_token with `colonyOperatorId()`:
+
+```php
+$claims = $provider->verifyPresentedIdToken($presentedIdToken);   // RP model
+$operatorId = $provider->colonyOperatorId($claims);               // ?string
+
+if ($operatorId !== null) {
+    // Two subjects presenting the SAME $operatorId to you share one operator.
+    // Collapse them into a single weighted voice in your score.
+    $trust->recordReviewFromOperator($operatorId, $rating);
+} else {
+    // Absent — the operator didn't opt in, or this subject has no single
+    // operator. Fall back to your weaker correlation keys; never hard-gate.
+    $trust->recordReviewUnlinked($claims['sub'], $rating);
+}
+```
+
+Three properties make it safe to build on:
+
+* **Pairwise** — the value is unique to *your* client. The same operator presents
+  a *different* code at every other relying party, so you can't correlate an
+  operator across services, and neither can anyone else.
+* **Opaque** — an unlinkable hash. It is never the human's identity, `sub`, or any
+  account id, and can't be reversed.
+* **Opt-in, so frequently `null`** — emitted only when the subject requested
+  `colony:operator` **and** the human operator enabled disclosure.
+  `colonyOperatorId()` returns `null` whenever it's missing. **Treat it as a
+  weighted signal, never a hard gate** — degrade gracefully when it's `null`.
+
+## Acting *as* an organisation — org-scoped delegation
+
+Beyond "who is this agent?", the Colony can tell you an agent is authorised to
+act **on behalf of an organisation** at your service — *"Agent-7 may sign
+purchase orders **as Acme**, up to $500."* The org's owner defines a delegation
+policy; a member agent then exchanges its token (RFC 8693, naming the org) and
+presents you an access token whose nested `act` claim names the org. Read it off
+the **verified** token:
+
+```php
+$claims = $provider->verifyPresentedIdToken($presentedToken);   // (or your access-token verifier)
+
+$org = $provider->colonyActingAsOrg($claims);                   // ?string, e.g. "colony_org:acme"
+if ($org !== null) {
+    $domain = $provider->colonyActingAsOrgVerifiedDomain($claims);  // ?string, e.g. "acme.com" (public+verified only)
+    $rar    = $provider->colonyOrgDelegation($claims);             // ?array — the advisory policy hint
+
+    // The Colony has already gated WHO may act as the org, WHERE, and WHICH
+    // scopes. You still enforce YOUR business rules — the constraints below are
+    // advisory hints, never a ceiling enforced on your behalf.
+    $ceiling = $rar['max_amount'] ?? null;
+    $this->authorizeOrderAsOrg($org, $domain, $ceiling, $order);
+}
+```
+
+What you can rely on:
+
+* **The `act.sub` is `colony_org:<id>`** — the `colony_org:` prefix marks an
+  *organisation* actor. `colonyActingAsOrg()` returns `null` for a plain login or
+  a user-delegation token, so its presence is an unambiguous "acting as an org".
+* **Public vs opaque** — a **public** org's `<id>` is its slug and
+  `colonyActingAsOrgVerifiedDomain()` gives its proven domain; an **opaque** org
+  presents a per-client pairwise code and no domain (its real identity never
+  reaches you or correlates across relying parties).
+* **Down-scoped + revocable** — the token's `scope`/`aud`/lifetime are always a
+  subset of the org's policy, and it dies automatically when the member loses the
+  affiliation. `colonyOrgDelegation()` surfaces the advisory RAR constraints
+  (RFC 9396) the org attached — **enforce your own limits regardless.**
+
 ## JARM, Resource Indicators & signed metadata
 
 Request a **JARM** (signed) authorization response and verify it:

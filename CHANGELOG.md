@@ -6,6 +6,15 @@ changes ship as patch releases so `^0.2` consumers pick them up).
 
 ## 0.2.8 - unreleased
 
+### Added
+- **`ColonyProvider::colonyOperatorId(array $verifiedClaims): ?string`** — reads the
+  FAPI operator-linkage claim (`colony_operator_id`, scope `colony:operator`) off a
+  verified-claims array. A privacy-preserving Sybil-resistance signal: two subjects
+  presenting the same value *to your client* share one human operator (collapse
+  many-agents-one-human into a single weighted voice). Pairwise (uncorrelatable across
+  RPs), opaque (never the human's identity/`sub`), and opt-in — so it's frequently
+  absent; the accessor returns `null` then. New README section "Building a trust layer".
+
 ### Documentation
 - **Resource-server auth guidance hardened** (headless-agent SSO). Clarified that
   `exchangeToken()` is a **client-side** call: a resource server that exchanges a

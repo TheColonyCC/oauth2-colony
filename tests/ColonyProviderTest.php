@@ -378,6 +378,105 @@ final class ColonyProviderTest extends TestCase
     }
 
     #[Test]
+    public function colony_operator_id_reads_the_claim(): void
+    {
+        $provider = $this->provider();
+        self::assertSame(
+            'op_ABC123',
+            $provider->colonyOperatorId(['colony_operator_id' => 'op_ABC123']),
+        );
+    }
+
+    #[Test]
+    public function colony_operator_id_is_null_when_absent(): void
+    {
+        // The opt-in / withheld case — RPs MUST degrade gracefully, so the
+        // accessor returns null rather than raising.
+        $provider = $this->provider();
+        self::assertNull($provider->colonyOperatorId(OidcTestKit::claims()));
+        self::assertNull($provider->colonyOperatorId([]));
+    }
+
+    #[Test]
+    public function colony_operator_id_rejects_non_string_or_empty(): void
+    {
+        $provider = $this->provider();
+        self::assertNull($provider->colonyOperatorId(['colony_operator_id' => '']));
+        self::assertNull($provider->colonyOperatorId(['colony_operator_id' => 123]));
+        self::assertNull($provider->colonyOperatorId(['colony_operator_id' => null]));
+    }
+
+    // --- Organisation-scoped delegation (F2) ----------------------------------
+    // "Agent may act AS the org." A member-delegated access token carries an
+    // RFC 8693 `act` naming the org + an RFC 9396 authorization_details hint.
+
+    /** A verified public-org delegated token, as the Colony mints it. */
+    private const ORG_DELEGATED_CLAIMS = [
+        'sub' => 'agent-pairwise-xyz',
+        'aud' => 'https://vendor.example',
+        'scope' => 'orders:write',
+        'act' => ['sub' => 'colony_org:acme', 'org_verified_domain' => 'acme.com'],
+        'authorization_details' => [
+            ['type' => 'colony_org_delegation', 'org' => 'colony_org:acme',
+             'granted_by' => 'org_policy', 'max_amount' => 500],
+        ],
+    ];
+
+    #[Test]
+    public function acting_as_org_reads_the_act_subject(): void
+    {
+        $provider = $this->provider();
+        self::assertSame(
+            'colony_org:acme',
+            $provider->colonyActingAsOrg(self::ORG_DELEGATED_CLAIMS),
+        );
+        self::assertSame(
+            'acme.com',
+            $provider->colonyActingAsOrgVerifiedDomain(self::ORG_DELEGATED_CLAIMS),
+        );
+    }
+
+    #[Test]
+    public function acting_as_org_reads_the_delegation_constraints(): void
+    {
+        $provider = $this->provider();
+        $rar = $provider->colonyOrgDelegation(self::ORG_DELEGATED_CLAIMS);
+        self::assertIsArray($rar);
+        self::assertSame('colony_org:acme', $rar['org']);
+        self::assertSame(500, $rar['max_amount']);
+    }
+
+    #[Test]
+    public function opaque_org_delegation_has_no_verified_domain(): void
+    {
+        // An opaque org's act.sub is a per-client pairwise code, and it never
+        // discloses a real slug or domain.
+        $provider = $this->provider();
+        $claims = ['act' => ['sub' => 'colony_org:pairwise-abc123']];
+        self::assertSame('colony_org:pairwise-abc123', $provider->colonyActingAsOrg($claims));
+        self::assertNull($provider->colonyActingAsOrgVerifiedDomain($claims));
+    }
+
+    #[Test]
+    public function acting_as_org_is_null_for_non_org_tokens(): void
+    {
+        $provider = $this->provider();
+        // A plain login token — no act at all.
+        self::assertNull($provider->colonyActingAsOrg(OidcTestKit::claims()));
+        self::assertNull($provider->colonyActingAsOrgVerifiedDomain(OidcTestKit::claims()));
+        self::assertNull($provider->colonyOrgDelegation(OidcTestKit::claims()));
+        // A user-delegation act (names a user, not an org) is NOT org-delegation.
+        $userAct = ['act' => ['sub' => 'user-123']];
+        self::assertNull($provider->colonyActingAsOrg($userAct));
+        // Malformed shapes degrade to null, never raise.
+        self::assertNull($provider->colonyActingAsOrg(['act' => 'not-an-array']));
+        self::assertNull($provider->colonyOrgDelegation(['authorization_details' => 'nope']));
+        self::assertNull($provider->colonyOrgDelegation(
+            ['authorization_details' => [['type' => 'openid_credential']]],
+        ));
+    }
+
+    #[Test]
     public function resource_owner_maps_claims(): void
     {
         $owner = new ColonyResourceOwner(OidcTestKit::claims());
