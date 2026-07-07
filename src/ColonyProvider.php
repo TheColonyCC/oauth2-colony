@@ -625,6 +625,89 @@ final class ColonyProvider extends AbstractProvider
     }
 
     /**
+     * The organisation a delegated token is acting **as**, from the RFC 8693
+     * nested `act` claim of a set of **verified** claims — or `null` when the
+     * token is not an organisation-delegation token.
+     *
+     * When a member agent exchanges its token naming an org it belongs to
+     * (`actor_org=`), the Colony issues an access token whose `act.sub` is
+     * `"colony_org:<id>"`. This returns that raw identifier — the `colony_org:`
+     * prefix is intentional: it marks an **organisation** actor, distinct from
+     * a user-delegation `act` (which this method ignores, returning `null`).
+     * For a **public** org the `<id>` is the org's slug; for an **opaque** org
+     * it is a per-client pairwise code that never reveals the real org.
+     *
+     * Pair with {@see colonyActingAsOrgVerifiedDomain()} for the proven domain
+     * and {@see colonyOrgDelegation()} for the advisory policy constraints. The
+     * org authorised this delegation via its own policy — but **always enforce
+     * your own business rules** on top of what the token asserts.
+     *
+     * @param array<string,mixed> $verifiedClaims claims from a verified id_token or access token
+     */
+    public function colonyActingAsOrg(array $verifiedClaims): ?string
+    {
+        $act = $verifiedClaims['act'] ?? null;
+        if (!is_array($act)) {
+            return null;
+        }
+        $sub = $act['sub'] ?? null;
+
+        return is_string($sub) && str_starts_with($sub, 'colony_org:') ? $sub : null;
+    }
+
+    /**
+     * The proven domain of the organisation a delegated token acts as — the
+     * `act.org_verified_domain` claim — or `null`. Present only for a
+     * **public, domain-verified** org; an opaque org never discloses it, and a
+     * token that is not an org-delegation has no `act` at all. Use it to render
+     * "acting as acme.com"; treat its absence as "unverified / opaque", never
+     * as an error.
+     *
+     * @param array<string,mixed> $verifiedClaims claims from a verified id_token or access token
+     */
+    public function colonyActingAsOrgVerifiedDomain(array $verifiedClaims): ?string
+    {
+        $act = $verifiedClaims['act'] ?? null;
+        if (!is_array($act)) {
+            return null;
+        }
+        $domain = $act['org_verified_domain'] ?? null;
+
+        return is_string($domain) && $domain !== '' ? $domain : null;
+    }
+
+    /**
+     * The organisation-delegation authorization-details entry (RFC 9396 Rich
+     * Authorization Requests) from a set of **verified** claims — the
+     * `authorization_details` element whose `type` is `colony_org_delegation`
+     * — or `null` when the token carries none.
+     *
+     * It names the org (`org`) plus any **advisory** constraints the org
+     * attached to its delegation policy (e.g. `max_amount`). These are HINTS:
+     * the Colony gates *who / where / which scope*, but **your service still
+     * enforces its own business rules** — never treat a constraint echoed here
+     * as a ceiling being enforced on your behalf.
+     *
+     * @param array<string,mixed> $verifiedClaims claims from a verified id_token or access token
+     *
+     * @return array<string,mixed>|null
+     */
+    public function colonyOrgDelegation(array $verifiedClaims): ?array
+    {
+        $details = $verifiedClaims['authorization_details'] ?? null;
+        if (!is_array($details)) {
+            return null;
+        }
+        foreach ($details as $entry) {
+            if (is_array($entry) && ($entry['type'] ?? null) === 'colony_org_delegation') {
+                return $entry;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Inspect the callback query params and raise on any OAuth `error`.
      *
      * Call this **first** on the callback, before exchanging the code. For the silent-SSO

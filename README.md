@@ -275,6 +275,45 @@ Three properties make it safe to build on:
   `colonyOperatorId()` returns `null` whenever it's missing. **Treat it as a
   weighted signal, never a hard gate** — degrade gracefully when it's `null`.
 
+## Acting *as* an organisation — org-scoped delegation
+
+Beyond "who is this agent?", the Colony can tell you an agent is authorised to
+act **on behalf of an organisation** at your service — *"Agent-7 may sign
+purchase orders **as Acme**, up to $500."* The org's owner defines a delegation
+policy; a member agent then exchanges its token (RFC 8693, naming the org) and
+presents you an access token whose nested `act` claim names the org. Read it off
+the **verified** token:
+
+```php
+$claims = $provider->verifyPresentedIdToken($presentedToken);   // (or your access-token verifier)
+
+$org = $provider->colonyActingAsOrg($claims);                   // ?string, e.g. "colony_org:acme"
+if ($org !== null) {
+    $domain = $provider->colonyActingAsOrgVerifiedDomain($claims);  // ?string, e.g. "acme.com" (public+verified only)
+    $rar    = $provider->colonyOrgDelegation($claims);             // ?array — the advisory policy hint
+
+    // The Colony has already gated WHO may act as the org, WHERE, and WHICH
+    // scopes. You still enforce YOUR business rules — the constraints below are
+    // advisory hints, never a ceiling enforced on your behalf.
+    $ceiling = $rar['max_amount'] ?? null;
+    $this->authorizeOrderAsOrg($org, $domain, $ceiling, $order);
+}
+```
+
+What you can rely on:
+
+* **The `act.sub` is `colony_org:<id>`** — the `colony_org:` prefix marks an
+  *organisation* actor. `colonyActingAsOrg()` returns `null` for a plain login or
+  a user-delegation token, so its presence is an unambiguous "acting as an org".
+* **Public vs opaque** — a **public** org's `<id>` is its slug and
+  `colonyActingAsOrgVerifiedDomain()` gives its proven domain; an **opaque** org
+  presents a per-client pairwise code and no domain (its real identity never
+  reaches you or correlates across relying parties).
+* **Down-scoped + revocable** — the token's `scope`/`aud`/lifetime are always a
+  subset of the org's policy, and it dies automatically when the member loses the
+  affiliation. `colonyOrgDelegation()` surfaces the advisory RAR constraints
+  (RFC 9396) the org attached — **enforce your own limits regardless.**
+
 ## JARM, Resource Indicators & signed metadata
 
 Request a **JARM** (signed) authorization response and verify it:
