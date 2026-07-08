@@ -4,6 +4,18 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## 0.2.9 - 2026-07-08
+
+### Added
+- **`ColonyProvider::colonyActionBinding(array $verifiedClaims): ?string`** — reads the
+  `colony_action_binding` claim off a verified-claims array. An opaque, client-supplied
+  digest over a concrete action, carried on a CIBA backchannel request (the `action_binding`
+  param) and echoed **verbatim** into the issued id_token as this claim. It turns a decoupled
+  *login*-consent into an *action*-consent: recompute your own digest over the exact action
+  you are about to take and require it to equal this value before acting — so you can prove
+  the human approved *this* action, not merely that they authenticated. Returns `null` when
+  absent (a plain login). Mirrors the `colonyOperatorId()` accessor shape.
+
 ## 0.2.8 - 2026-07-07
 
 ### Added
