@@ -708,6 +708,27 @@ final class ColonyProvider extends AbstractProvider
     }
 
     /**
+     * The action-binding digest (`colony_action_binding`) off a set of **verified** claims —
+     * the array from {@see verifyIdToken()} / {@see verifyPresentedIdToken()} — or `null`.
+     *
+     * An opaque, client-supplied digest over a concrete action, carried on a CIBA backchannel
+     * request (the `action_binding` param) and echoed **verbatim** into the issued id_token as
+     * this claim. It turns a decoupled *login*-consent into an *action*-consent: recompute your
+     * own digest over the exact action you are about to take and require it to equal this value
+     * before acting — so you can prove the human approved *this* action, not merely that they
+     * authenticated. Returns `null` when absent (a plain login with no action bound). Pair it
+     * with the human-readable `binding_message` the operator saw at the approval screen.
+     *
+     * @param array<string,mixed> $verifiedClaims claims from verify(Presented)IdToken()
+     */
+    public function colonyActionBinding(array $verifiedClaims): ?string
+    {
+        $value = $verifiedClaims['colony_action_binding'] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
      * Inspect the callback query params and raise on any OAuth `error`.
      *
      * Call this **first** on the callback, before exchanging the code. For the silent-SSO

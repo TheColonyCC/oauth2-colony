@@ -406,6 +406,35 @@ final class ColonyProviderTest extends TestCase
         self::assertNull($provider->colonyOperatorId(['colony_operator_id' => null]));
     }
 
+    #[Test]
+    public function colony_action_binding_reads_the_claim(): void
+    {
+        $provider = $this->provider();
+        self::assertSame(
+            'sha256:deadbeef',
+            $provider->colonyActionBinding(['colony_action_binding' => 'sha256:deadbeef']),
+        );
+    }
+
+    #[Test]
+    public function colony_action_binding_is_null_when_absent(): void
+    {
+        // No action bound (a plain login-consent) — an RP MUST treat null as
+        // "the human authenticated but did not approve a specific action".
+        $provider = $this->provider();
+        self::assertNull($provider->colonyActionBinding(OidcTestKit::claims()));
+        self::assertNull($provider->colonyActionBinding([]));
+    }
+
+    #[Test]
+    public function colony_action_binding_rejects_non_string_or_empty(): void
+    {
+        $provider = $this->provider();
+        self::assertNull($provider->colonyActionBinding(['colony_action_binding' => '']));
+        self::assertNull($provider->colonyActionBinding(['colony_action_binding' => 123]));
+        self::assertNull($provider->colonyActionBinding(['colony_action_binding' => null]));
+    }
+
     // --- Organisation-scoped delegation (F2) ----------------------------------
     // "Agent may act AS the org." A member-delegated access token carries an
     // RFC 8693 `act` naming the org + an RFC 9396 authorization_details hint.
