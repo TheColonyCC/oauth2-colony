@@ -33,7 +33,7 @@ use TheColony\OAuth2\Exception\ColonyOidcException;
  *
  * Recognised constructor options (in addition to league's clientId /
  * clientSecret / redirectUri): `issuer` (Colony base URL, default
- * https://thecolony.cc), `scope` (space-delimited, default "openid profile
+ * https://thecolony.ai), `scope` (space-delimited, default "openid profile
  * email"), and optional `cache` (PSR-16) + `cacheTtl` for discovery/JWKS.
  *
  * Partner-auth options: `tokenEndpointAuthMethod` — `client_secret_post`
@@ -45,7 +45,7 @@ use TheColony\OAuth2\Exception\ColonyOidcException;
  */
 final class ColonyProvider extends AbstractProvider
 {
-    protected string $issuer = 'https://thecolony.cc';
+    protected string $issuer = 'https://thecolony.ai';
     protected ?string $scope = null;
     protected ?CacheInterface $cache = null;
     protected int $cacheTtl = 3600;
