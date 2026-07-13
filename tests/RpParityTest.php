@@ -20,14 +20,14 @@ use TheColony\OAuth2\IdTokenVerifier;
  */
 final class RpParityTest extends TestCase
 {
-    private const ISSUER = 'https://thecolony.cc';
+    private const ISSUER = 'https://thecolony.ai';
     private const CLIENT = 'colony_client_abc';
     private const DISCOVERY = [
         'issuer' => self::ISSUER,
-        'authorization_endpoint' => 'https://thecolony.cc/oauth/authorize',
-        'token_endpoint' => 'https://thecolony.cc/oauth/token',
-        'userinfo_endpoint' => 'https://thecolony.cc/oauth/userinfo',
-        'jwks_uri' => 'https://thecolony.cc/.well-known/jwks.json',
+        'authorization_endpoint' => 'https://thecolony.ai/oauth/authorize',
+        'token_endpoint' => 'https://thecolony.ai/oauth/token',
+        'userinfo_endpoint' => 'https://thecolony.ai/oauth/userinfo',
+        'jwks_uri' => 'https://thecolony.ai/.well-known/jwks.json',
     ];
 
     private OidcTestKit $kit;

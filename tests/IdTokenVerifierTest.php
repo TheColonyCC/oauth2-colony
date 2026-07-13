@@ -28,7 +28,7 @@ final class IdTokenVerifierTest extends TestCase
         return $this->verifier->verify(
             $token,
             $this->kit->jwksJson(),
-            'https://thecolony.cc',
+            'https://thecolony.ai',
             'colony_client_abc',
             'nonce-xyz',
             $now,
@@ -47,7 +47,7 @@ final class IdTokenVerifierTest extends TestCase
     public function it_rejects_an_unparseable_token(): void
     {
         $this->expectException(ColonyOidcException::class);
-        $this->verifier->verify('not-a-jwt', $this->kit->jwksJson(), 'https://thecolony.cc', 'colony_client_abc', 'nonce-xyz');
+        $this->verifier->verify('not-a-jwt', $this->kit->jwksJson(), 'https://thecolony.ai', 'colony_client_abc', 'nonce-xyz');
     }
 
     #[Test]
@@ -58,7 +58,7 @@ final class IdTokenVerifierTest extends TestCase
         $this->expectException(ColonyOidcException::class);
         $this->expectExceptionMessage('signature');
         // verify against OUR jwks, not the attacker's
-        $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.cc', 'colony_client_abc', 'nonce-xyz');
+        $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.ai', 'colony_client_abc', 'nonce-xyz');
     }
 
     #[Test]
@@ -70,7 +70,7 @@ final class IdTokenVerifierTest extends TestCase
         [$h, $p, $s] = explode('.', $token);
         $tampered = rtrim(strtr(base64_encode('{"alg":"none"}'), '+/', '-_'), '=') . ".$p.$s";
         $this->expectException(ColonyOidcException::class);
-        $this->verifier->verify($tampered, $this->kit->jwksJson(), 'https://thecolony.cc', 'colony_client_abc', 'nonce-xyz');
+        $this->verifier->verify($tampered, $this->kit->jwksJson(), 'https://thecolony.ai', 'colony_client_abc', 'nonce-xyz');
     }
 
     #[Test]
@@ -144,7 +144,7 @@ final class IdTokenVerifierTest extends TestCase
         unset($claims['nonce']);
         $token = $this->kit->idToken($claims);
 
-        $verified = $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.cc', 'colony_client_abc', null);
+        $verified = $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.ai', 'colony_client_abc', null);
         self::assertSame('colony-sub-123', $verified['sub']);
     }
 
@@ -153,7 +153,7 @@ final class IdTokenVerifierTest extends TestCase
     {
         $token = $this->kit->idToken(OidcTestKit::claims(['nonce' => 'whatever']));
 
-        $verified = $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.cc', 'colony_client_abc', null);
+        $verified = $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.ai', 'colony_client_abc', null);
         self::assertSame('colony-sub-123', $verified['sub']);
     }
 
@@ -171,7 +171,7 @@ final class IdTokenVerifierTest extends TestCase
         $token = $this->kit->idTokenRaw(json_encode('just-a-string'));
         $this->expectException(ColonyOidcException::class);
         $this->expectExceptionMessage('JSON object');
-        $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.cc', 'colony_client_abc', 'nonce-xyz');
+        $this->verifier->verify($token, $this->kit->jwksJson(), 'https://thecolony.ai', 'colony_client_abc', 'nonce-xyz');
     }
 
     #[Test]
@@ -180,6 +180,6 @@ final class IdTokenVerifierTest extends TestCase
         $token = $this->kit->idToken(OidcTestKit::claims());
         $this->expectException(ColonyOidcException::class);
         $this->expectExceptionMessage('JWKS');
-        $this->verifier->verify($token, '{"not":"a keyset"}', 'https://thecolony.cc', 'colony_client_abc', 'nonce-xyz');
+        $this->verifier->verify($token, '{"not":"a keyset"}', 'https://thecolony.ai', 'colony_client_abc', 'nonce-xyz');
     }
 }

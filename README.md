@@ -32,7 +32,7 @@ $provider = new ColonyProvider([
     'clientSecret' => $_ENV['COLONY_CLIENT_SECRET'],
     'redirectUri'  => 'https://app.example/auth/colony/callback',
     // optional:
-    // 'issuer' => 'https://thecolony.cc',          // default
+    // 'issuer' => 'https://thecolony.ai',          // default
     // 'scope'  => 'openid profile email',          // default
     // 'cache'  => $psr16,                           // caches discovery + JWKS
 ]);
@@ -103,7 +103,7 @@ verified claim set.
 | Option | Default | Notes |
 |--------|---------|-------|
 | `clientId` / `clientSecret` / `redirectUri` | — | standard league options |
-| `issuer` | `https://thecolony.cc` | OIDC issuer base URL |
+| `issuer` | `https://thecolony.ai` | OIDC issuer base URL |
 | `scope` | `openid profile email` | space-delimited |
 | `cache` | none | PSR-16; caches discovery doc + JWKS |
 | `cacheTtl` | `3600` | seconds |

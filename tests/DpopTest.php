@@ -22,11 +22,11 @@ use TheColony\OAuth2\DpopProof;
 final class DpopTest extends TestCase
 {
     private const DISCOVERY = [
-        'issuer' => 'https://thecolony.cc',
-        'authorization_endpoint' => 'https://thecolony.cc/oauth/authorize',
-        'token_endpoint' => 'https://thecolony.cc/oauth/token',
-        'userinfo_endpoint' => 'https://thecolony.cc/oauth/userinfo',
-        'jwks_uri' => 'https://thecolony.cc/.well-known/jwks.json',
+        'issuer' => 'https://thecolony.ai',
+        'authorization_endpoint' => 'https://thecolony.ai/oauth/authorize',
+        'token_endpoint' => 'https://thecolony.ai/oauth/token',
+        'userinfo_endpoint' => 'https://thecolony.ai/oauth/userinfo',
+        'jwks_uri' => 'https://thecolony.ai/.well-known/jwks.json',
     ];
 
     private function discoveryResponse(): Response
@@ -63,13 +63,13 @@ final class DpopTest extends TestCase
     {
         $jwk = JWKFactory::createECKey('P-256');
         $dpop = new DpopProof($jwk);
-        [$header, $claims] = $this->decodeJwt($dpop->proof('POST', 'https://thecolony.cc/oauth/token'));
+        [$header, $claims] = $this->decodeJwt($dpop->proof('POST', 'https://thecolony.ai/oauth/token'));
 
         self::assertSame('dpop+jwt', $header['typ']);
         self::assertSame('ES256', $header['alg']);
         self::assertSame(['kty', 'crv', 'x', 'y'], array_keys($header['jwk']));  // public only
         self::assertSame('POST', $claims['htm']);
-        self::assertSame('https://thecolony.cc/oauth/token', $claims['htu']);
+        self::assertSame('https://thecolony.ai/oauth/token', $claims['htu']);
         self::assertArrayHasKey('jti', $claims);
         self::assertArrayHasKey('iat', $claims);
         self::assertArrayNotHasKey('ath', $claims);

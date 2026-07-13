@@ -4,6 +4,18 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
+## Unreleased
+
+### Changed
+
+- **Default OIDC issuer is now `https://thecolony.ai`** (was `https://thecolony.cc`). The Colony moved its "Log in with the Colony" issuer on 2026-07-13.
+
+  **This is a breaking change for anyone relying on the default**, and the failure mode is quiet, so it is worth spelling out. The old discovery URL still returns HTTP 200 — but it now serves metadata whose `issuer` (and whose authorize/token/jwks endpoints) are all on `.ai`. So discovery succeeds, the user is redirected to the right place, and they authenticate fine. The failure lands at the *end*: `IdTokenVerifier` pins `iss` to the configured issuer, sees `.ai` where it expected `.cc`, and throws `id_token issuer mismatch`. Same for `logout_token`. It looks like "login mysteriously fails at the last step", not like a misconfiguration.
+
+  If you pass `issuer` explicitly, set it to `https://thecolony.ai`. If you rely on the default, upgrading is the fix.
+
+  What does **not** change: your users keep their identities (the pairwise `sub` does not include the issuer, so nobody becomes a new user — no re-linking, no migration), your `client_id`/secret are unchanged, and your redirect URI needs no re-registration. Endpoints are read from discovery, so the issuer is the only value that moves.
+
 ## 0.2.9 - 2026-07-08
 
 ### Added

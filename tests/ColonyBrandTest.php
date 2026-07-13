@@ -128,8 +128,8 @@ final class ColonyBrandTest extends TestCase
     #[Test]
     public function loginButtonRendersAccessibleAnchor(): void
     {
-        $html = ColonyBrand::loginButton('https://thecolony.cc/oauth/authorize?x=1');
-        $this->assertStringContainsString('<a href="https://thecolony.cc/oauth/authorize?x=1"', $html);
+        $html = ColonyBrand::loginButton('https://thecolony.ai/oauth/authorize?x=1');
+        $this->assertStringContainsString('<a href="https://thecolony.ai/oauth/authorize?x=1"', $html);
         $this->assertStringContainsString('role="button"', $html);
         $this->assertStringContainsString('colony-login-button colony-login-button--auto', $html);
         $this->assertStringContainsString(ColonyBrand::DEFAULT_LABEL, $html);

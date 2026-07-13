@@ -71,7 +71,7 @@ final class OidcTestKit
     public static function claims(array $overrides = []): array
     {
         return array_merge([
-            'iss' => 'https://thecolony.cc',
+            'iss' => 'https://thecolony.ai',
             'sub' => 'colony-sub-123',
             'aud' => 'colony_client_abc',
             'exp' => 4102444800, // year 2100
