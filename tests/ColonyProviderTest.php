@@ -26,11 +26,11 @@ use TheColony\OAuth2\Exception\ColonyOidcException;
 final class ColonyProviderTest extends TestCase
 {
     private const DISCOVERY = [
-        'issuer' => 'https://thecolony.cc',
-        'authorization_endpoint' => 'https://thecolony.cc/oauth/authorize',
-        'token_endpoint' => 'https://thecolony.cc/oauth/token',
-        'userinfo_endpoint' => 'https://thecolony.cc/oauth/userinfo',
-        'jwks_uri' => 'https://thecolony.cc/.well-known/jwks.json',
+        'issuer' => 'https://thecolony.ai',
+        'authorization_endpoint' => 'https://thecolony.ai/oauth/authorize',
+        'token_endpoint' => 'https://thecolony.ai/oauth/token',
+        'userinfo_endpoint' => 'https://thecolony.ai/oauth/userinfo',
+        'jwks_uri' => 'https://thecolony.ai/.well-known/jwks.json',
     ];
 
     /** @param list<Response> $responses */
@@ -81,7 +81,7 @@ final class ColonyProviderTest extends TestCase
         $provider = $this->provider([$this->discoveryResponse()]);
         $url = $provider->getAuthorizationUrl();
 
-        self::assertStringStartsWith('https://thecolony.cc/oauth/authorize?', $url);
+        self::assertStringStartsWith('https://thecolony.ai/oauth/authorize?', $url);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
         self::assertSame('colony_client_abc', $q['client_id']);
         self::assertSame('openid profile email', $q['scope']);
@@ -124,7 +124,7 @@ final class ColonyProviderTest extends TestCase
     {
         // No queued responses → guzzle MockHandler throws on request → endpoint() swallows it.
         $provider = $this->provider([]);
-        self::assertSame('https://thecolony.cc/oauth/authorize', $provider->getBaseAuthorizationUrl());
+        self::assertSame('https://thecolony.ai/oauth/authorize', $provider->getBaseAuthorizationUrl());
     }
 
     #[Test]
@@ -157,7 +157,7 @@ final class ColonyProviderTest extends TestCase
         $idToken = $newKit->idToken(OidcTestKit::claims());
         $cache = new ArrayCache();
         // Pre-seed the cache with the OLD jwks so the first verify misses.
-        $cache->set('colony_oidc_jwks_' . sha1('https://thecolony.cc/.well-known/jwks.json'), $oldKit->jwksJson());
+        $cache->set('colony_oidc_jwks_' . sha1('https://thecolony.ai/.well-known/jwks.json'), $oldKit->jwksJson());
 
         $provider = $this->provider([
             $this->discoveryResponse(),
@@ -192,7 +192,7 @@ final class ColonyProviderTest extends TestCase
     {
         $provider = $this->provider([$this->discoveryResponse()]);
         $conf = $provider->getOpenidConfiguration();
-        self::assertSame('https://thecolony.cc/oauth/token', $conf['token_endpoint']);
+        self::assertSame('https://thecolony.ai/oauth/token', $conf['token_endpoint']);
     }
 
     #[Test]
@@ -685,7 +685,7 @@ final class ColonyProviderTest extends TestCase
     {
         $provider = $this->provider([$this->discoveryResponse()]);
         $token = new AccessToken(['access_token' => 'at']);
-        self::assertSame('https://thecolony.cc/oauth/userinfo', $provider->getResourceOwnerDetailsUrl($token));
+        self::assertSame('https://thecolony.ai/oauth/userinfo', $provider->getResourceOwnerDetailsUrl($token));
     }
 
     #[Test]
@@ -703,11 +703,11 @@ final class ColonyProviderTest extends TestCase
         $cache = new ArrayCache();
         // Only ONE discovery response queued; a second fetch would throw if not cached.
         $provider = $this->provider([$this->discoveryResponse()], ['cache' => $cache]);
-        self::assertSame('https://thecolony.cc/oauth/token', $provider->getBaseAccessTokenUrl([]));
+        self::assertSame('https://thecolony.ai/oauth/token', $provider->getBaseAccessTokenUrl([]));
 
         // Fresh provider, same cache, no queued responses — must hit the cache.
         $provider2 = $this->provider([], ['cache' => $cache]);
-        self::assertSame('https://thecolony.cc/oauth/token', $provider2->getBaseAccessTokenUrl([]));
+        self::assertSame('https://thecolony.ai/oauth/token', $provider2->getBaseAccessTokenUrl([]));
     }
 
     // -- humans vs agents: ColonyResourceOwner --------------------------------
@@ -825,7 +825,7 @@ final class ColonyProviderTest extends TestCase
     #[Test]
     public function end_session_url_reads_discovery_and_carries_supplied_params(): void
     {
-        $disc = array_merge(self::DISCOVERY, ['end_session_endpoint' => 'https://thecolony.cc/oauth/end-session']);
+        $disc = array_merge(self::DISCOVERY, ['end_session_endpoint' => 'https://thecolony.ai/oauth/end-session']);
         $provider = $this->provider([
             new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($disc)),
         ]);
@@ -834,7 +834,7 @@ final class ColonyProviderTest extends TestCase
             postLogoutRedirectUri: 'https://app.example/bye?a=b',
             state: 'xyz',
         );
-        self::assertStringStartsWith('https://thecolony.cc/oauth/end-session?', $url);
+        self::assertStringStartsWith('https://thecolony.ai/oauth/end-session?', $url);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
         self::assertSame('colony_client_abc', $q['client_id']);
         self::assertSame('idt.123', $q['id_token_hint']);
@@ -849,7 +849,7 @@ final class ColonyProviderTest extends TestCase
         // and getEndSessionUrl must still produce a usable URL with only client_id.
         $provider = $this->provider([]);
         $url = $provider->getEndSessionUrl();
-        self::assertStringStartsWith('https://thecolony.cc/oauth/end-session?', $url);
+        self::assertStringStartsWith('https://thecolony.ai/oauth/end-session?', $url);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
         self::assertSame(['client_id' => 'colony_client_abc'], $q);
     }
@@ -862,7 +862,7 @@ final class ColonyProviderTest extends TestCase
     private function logoutClaims(array $over = []): array
     {
         return array_merge([
-            'iss' => 'https://thecolony.cc', 'aud' => 'colony_client_abc',
+            'iss' => 'https://thecolony.ai', 'aud' => 'colony_client_abc',
             'iat' => time(), 'exp' => time() + 120, 'jti' => 'logout-jti-1',
             'sub' => 'agent_123', 'sid' => 'sess_42',
             'events' => [self::BCL => []],
@@ -955,7 +955,7 @@ final class ColonyProviderTest extends TestCase
     public function validate_authorization_response_issuer_accepts_a_matching_iss(): void
     {
         $provider = $this->provider([]);
-        $provider->validateAuthorizationResponseIssuer(['code' => 'abc', 'iss' => 'https://thecolony.cc']);
+        $provider->validateAuthorizationResponseIssuer(['code' => 'abc', 'iss' => 'https://thecolony.ai']);
         self::assertTrue(true);   // no exception thrown
     }
 
@@ -1001,7 +1001,7 @@ final class ColonyProviderTest extends TestCase
     public function validate_front_channel_logout_accepts_a_valid_iss_and_sid(): void
     {
         $provider = $this->provider([]);
-        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.cc', 'sid' => 'sess_42']);
+        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.ai', 'sid' => 'sess_42']);
         self::assertTrue(true);   // no exception thrown
     }
 
@@ -1029,7 +1029,7 @@ final class ColonyProviderTest extends TestCase
         $provider = $this->provider([]);
         $this->expectException(ColonyOidcException::class);
         $this->expectExceptionMessage('missing sid');
-        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.cc']);
+        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.ai']);
     }
 
     #[Test]
@@ -1038,7 +1038,7 @@ final class ColonyProviderTest extends TestCase
         $provider = $this->provider([]);
         $this->expectException(ColonyOidcException::class);
         $this->expectExceptionMessage('missing sid');
-        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.cc', 'sid' => '']);
+        $provider->validateFrontChannelLogout(['iss' => 'https://thecolony.ai', 'sid' => '']);
     }
 
     // -- silent SSO ----------------------------------------------------------
@@ -1160,7 +1160,7 @@ final class ColonyProviderTest extends TestCase
         // actual token request is attempted without a secret.
         $h = [];   // providerWithHistory omits the default secret
         $provider = $this->providerWithHistory([$this->discoveryResponse()], $h);
-        self::assertSame('https://thecolony.cc/oauth/authorize', $provider->getBaseAuthorizationUrl());
+        self::assertSame('https://thecolony.ai/oauth/authorize', $provider->getBaseAuthorizationUrl());
     }
 
     #[Test]
@@ -1196,7 +1196,7 @@ final class ColonyProviderTest extends TestCase
         $claims = json_decode((string) $jws->getPayload(), true);
         self::assertSame('colony_client_abc', $claims['iss']);
         self::assertSame('colony_client_abc', $claims['sub']);
-        self::assertSame('https://thecolony.cc/oauth/token', $claims['aud']);
+        self::assertSame('https://thecolony.ai/oauth/token', $claims['aud']);
         self::assertNotEmpty($claims['jti']);
         self::assertGreaterThan(time(), $claims['exp']);
     }
@@ -1224,7 +1224,7 @@ final class ColonyProviderTest extends TestCase
     public function par_pushes_parameters_and_returns_a_request_uri_url(): void
     {
         $history = [];
-        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.cc/oauth/par']);
+        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.ai/oauth/par']);
         $provider = $this->providerWithHistory([
             new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($disc)),
             new Response(201, ['Content-Type' => 'application/json'],
@@ -1234,7 +1234,7 @@ final class ColonyProviderTest extends TestCase
         $url = $provider->getAuthorizationUrl(['scope' => 'openid profile']);
 
         // The browser URL carries ONLY client_id + request_uri.
-        self::assertStringStartsWith('https://thecolony.cc/oauth/authorize?', $url);
+        self::assertStringStartsWith('https://thecolony.ai/oauth/authorize?', $url);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
         self::assertEqualsCanonicalizing(['client_id', 'request_uri'], array_keys($q));
         self::assertSame('urn:colony:par:abc123', $q['request_uri']);
@@ -1242,7 +1242,7 @@ final class ColonyProviderTest extends TestCase
 
         // The push (2nd HTTP call) carried the real authorization params + client auth.
         $par = end($history)['request'];
-        self::assertSame('https://thecolony.cc/oauth/par', (string) $par->getUri());
+        self::assertSame('https://thecolony.ai/oauth/par', (string) $par->getUri());
         self::assertSame('POST', $par->getMethod());
         parse_str((string) $par->getBody(), $pushed);
         self::assertSame('code', $pushed['response_type']);
@@ -1261,7 +1261,7 @@ final class ColonyProviderTest extends TestCase
     {
         $kit = new OidcTestKit();
         $history = [];
-        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.cc/oauth/par']);
+        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.ai/oauth/par']);
         $provider = $this->providerWithHistory([
             new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($disc)),
             new Response(201, ['Content-Type' => 'application/json'], (string) json_encode(['request_uri' => 'urn:colony:par:xyz'])),
@@ -1278,7 +1278,7 @@ final class ColonyProviderTest extends TestCase
     public function par_can_be_enabled_per_call(): void
     {
         $history = [];
-        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.cc/oauth/par']);
+        $disc = array_merge(self::DISCOVERY, ['pushed_authorization_request_endpoint' => 'https://thecolony.ai/oauth/par']);
         $provider = $this->providerWithHistory([
             new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($disc)),
             new Response(201, ['Content-Type' => 'application/json'], (string) json_encode(['request_uri' => 'urn:colony:par:perCall'])),
