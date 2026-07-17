@@ -129,6 +129,23 @@ final class IdTokenVerifierTest extends TestCase
     }
 
     #[Test]
+    public function it_rejects_a_not_yet_valid_token(): void
+    {
+        // nbf 600s ahead of `now`, beyond the 60s leeway → not yet valid
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('not yet valid');
+        $this->verify(['nbf' => 1_700_000_600], now: 1_700_000_000);
+    }
+
+    #[Test]
+    public function it_allows_nbf_within_clock_skew(): void
+    {
+        // nbf 30s ahead of `now` but inside the 60s leeway → still valid
+        $claims = $this->verify(['nbf' => 1_700_000_030], now: 1_700_000_000);
+        self::assertSame('colony-sub-123', $claims['sub']);
+    }
+
+    #[Test]
     public function it_rejects_nonce_mismatch(): void
     {
         $this->expectException(ColonyOidcException::class);

@@ -91,6 +91,13 @@ final class IdTokenVerifier
         if (!isset($claims['exp']) || $now > ((int) $claims['exp'] + self::LEEWAY_SECONDS)) {
             throw new ColonyOidcException('id_token expired');
         }
+        // OIDC id_tokens rarely carry `nbf`, but when one is present it MUST be honoured:
+        // a token is not valid before its not-before time (minus the same clock-skew leeway
+        // we allow on `exp`). Without this a token minted with a future `nbf` would be
+        // accepted early.
+        if (isset($claims['nbf']) && $now < ((int) $claims['nbf'] - self::LEEWAY_SECONDS)) {
+            throw new ColonyOidcException('id_token not yet valid');
+        }
         if ($expectedNonce !== null && ($claims['nonce'] ?? null) !== $expectedNonce) {
             throw new ColonyOidcException('id_token nonce mismatch');
         }
