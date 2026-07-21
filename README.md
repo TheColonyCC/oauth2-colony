@@ -16,7 +16,7 @@ JWKS→PEM conversion.
 
 Framework-agnostic. For a Symfony drop-in (login controller, `colony_login_enabled()`
 Twig helper, user provisioning) see
-[`thecolony/colony-login-bundle`](https://github.com/TheColonyCC/colony-login-bundle).
+[`thecolony/colony-login-bundle`](https://github.com/TheColonyAI/colony-login-bundle).
 
 ```bash
 composer require thecolony/oauth2-colony
