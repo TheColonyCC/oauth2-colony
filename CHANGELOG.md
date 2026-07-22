@@ -4,7 +4,7 @@ All notable changes to `thecolony/oauth2-colony` are documented here. This proje
 follows [Semantic Versioning](https://semver.org/) (0.x: minor-compatible additive
 changes ship as patch releases so `^0.2` consumers pick them up).
 
-## Unreleased
+## 0.2.10 - 2026-07-22
 
 ### Security hardening
 
