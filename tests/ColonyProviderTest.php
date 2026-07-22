@@ -305,6 +305,67 @@ final class ColonyProviderTest extends TestCase
     }
 
     #[Test]
+    public function discovery_rejects_a_document_advertising_a_different_issuer(): void
+    {
+        // OpenID Connect Discovery 1.0 §4.3: the issuer in the document MUST be
+        // identical to the URL it was fetched from. Before this check the
+        // advertised value simply won — `$disc['issuer'] ?? $this->issuer` — so
+        // a client configured for one issuer would verify tokens minted by
+        // another, and send its token requests there, purely on the say-so of a
+        // document served at the configured address.
+        //
+        // This is the real Colony .cc -> .ai move: thecolony.cc still serves a
+        // discovery document whose issuer is thecolony.ai, so RPs configured for
+        // .cc silently retargeted instead of failing as announced.
+        $kit = new OidcTestKit();
+        $idToken = $kit->idToken(OidcTestKit::claims());
+        $moved = array_merge(self::DISCOVERY, ['issuer' => 'https://thecolony.ai']);
+        $provider = $this->provider(
+            [new Response(200, ['Content-Type' => 'application/json'], (string) json_encode($moved))],
+            ['issuer' => 'https://thecolony.cc'],
+        );
+
+        $this->expectException(ColonyOidcException::class);
+        $this->expectExceptionMessage('issuer mismatch');
+        $provider->verifyPresentedIdToken($idToken, null);
+    }
+
+    #[Test]
+    public function discovery_accepts_a_document_whose_issuer_matches(): void
+    {
+        // Anti-vacuity for the test above: it would also pass if discovery threw
+        // on everything. The default configuration must still work end to end.
+        $kit = new OidcTestKit();
+        $claims = OidcTestKit::claims();
+        unset($claims['nonce']);
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $kit->jwksJson()),
+        ]);
+
+        $verified = $provider->verifyPresentedIdToken($kit->idToken($claims), null);
+        self::assertSame('colonist-one', $verified['preferred_username']);
+    }
+
+    #[Test]
+    public function discovery_tolerates_a_trailing_slash_difference(): void
+    {
+        // Configured "https://thecolony.ai/" vs advertised "https://thecolony.ai"
+        // is the same issuer, not an attack. Rejecting it would break RPs over
+        // a formatting detail.
+        $kit = new OidcTestKit();
+        $claims = OidcTestKit::claims();
+        unset($claims['nonce']);
+        $provider = $this->provider([
+            $this->discoveryResponse(),
+            new Response(200, [], $kit->jwksJson()),
+        ], ['issuer' => 'https://thecolony.ai/']);
+
+        $verified = $provider->verifyPresentedIdToken($kit->idToken($claims), null);
+        self::assertSame('colonist-one', $verified['preferred_username']);
+    }
+
+    #[Test]
     public function verify_presented_id_token_rejects_a_token_for_another_audience(): void
     {
         $kit = new OidcTestKit();

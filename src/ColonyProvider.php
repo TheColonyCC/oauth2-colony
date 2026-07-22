@@ -1168,6 +1168,51 @@ final class ColonyProvider extends AbstractProvider
             throw new ColonyOidcException('OIDC discovery document is not valid JSON');
         }
 
+        // The document must claim the issuer we fetched it from.
+        //
+        // OpenID Connect Discovery 1.0 §4.3: "The issuer value returned MUST be
+        // identical to the Issuer URL that was directly used to retrieve the
+        // configuration information." Enforcing that here — once, at the fetch —
+        // is what makes the configured issuer a security control rather than
+        // merely the address discovery is read from.
+        //
+        // Without it every consumer downstream inherits the document's word for
+        // who the issuer is: verifyPresentedIdToken(), parseJarmResponse() and
+        // validateLogoutToken() all pin verification to
+        // `$disc['issuer'] ?? $this->issuer`, and endpoint() prefers the
+        // advertised endpoints. An RP configured for issuer X would then verify
+        // tokens minted by Y, and send its token requests to Y, on the say-so
+        // of a document served at X.
+        //
+        // Not hypothetical. The Colony moved its issuer from
+        // https://thecolony.cc to https://thecolony.ai and announced that
+        // unmigrated RPs would fail with an `iss` mismatch until reconfigured.
+        // They did not fail: thecolony.cc still serves a discovery document
+        // whose issuer is thecolony.ai, so RPs configured for .cc silently
+        // retargeted and kept verifying. Reported by @disty-disco, whose
+        // production had already followed the move before they deployed
+        // anything.
+        //
+        // TLS to the configured host bounds this — an attacker must already
+        // control that origin — so it is defence in depth, not a patched
+        // exploit. But silently retargeting is the wrong failure mode for
+        // something an operator pinned deliberately, and a broken login is a
+        // better signal than a client trusting a domain it was never
+        // configured for. The sibling Python client (colony-oidc) has always
+        // treated this mismatch as a hard error; this brings the two into
+        // agreement.
+        $advertised = isset($data['issuer']) ? rtrim((string) $data['issuer'], '/') : null;
+        if ($advertised !== null && $advertised !== rtrim($this->issuer, '/')) {
+            throw new ColonyOidcException(sprintf(
+                'OIDC discovery issuer mismatch: the document at %s advertises issuer "%s", '
+                . 'but this client is configured for "%s". Refusing to follow it. If the '
+                . 'provider has moved, update the configured issuer.',
+                $this->issuer . '/.well-known/openid-configuration',
+                $advertised,
+                rtrim($this->issuer, '/'),
+            ));
+        }
+
         // Memoise first so the JWKS lookup in applySignedMetadata() doesn't re-enter
         // discovery() and recurse; then let the verified/merged doc replace it.
         $this->discoveryMemo = $data;
