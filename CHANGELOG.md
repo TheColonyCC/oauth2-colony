@@ -6,6 +6,36 @@ changes ship as patch releases so `^0.2` consumers pick them up).
 
 ## Unreleased
 
+### Security hardening
+
+- **Discovery documents must now claim the issuer they were fetched from.** Per
+  OpenID Connect Discovery 1.0 §4.3 the `issuer` in the document MUST be
+  identical to the URL used to retrieve it; `discovery()` now enforces that and
+  throws `ColonyOidcException` on a mismatch instead of deferring to the
+  document.
+
+  Previously the advertised value simply won — `verifyPresentedIdToken()`,
+  `parseJarmResponse()` and `validateLogoutToken()` all pinned verification to
+  `$disc['issuer'] ?? $this->issuer`, and `endpoint()` preferred the advertised
+  endpoints. A client configured for issuer X would therefore verify tokens
+  minted by Y and send its token requests to Y, on the say-so of a document
+  served at X. The configured issuer was effectively documentation rather than
+  a security control.
+
+  **This is not a patched exploit** — TLS to the configured host bounds it, so
+  an attacker must already control that origin. It is defence in depth, and it
+  restores the property operators believe they have when they pin an issuer.
+
+  **You may need to act.** If your configured issuer no longer matches what the
+  provider advertises, this upgrade turns a silent retarget into a loud error.
+  For The Colony specifically: `https://thecolony.cc` still serves a document
+  whose issuer is `https://thecolony.ai`, so RPs configured for `.cc` must
+  update to `.ai`. That failure is the intended outcome — it is what the
+  migration announcement promised would happen, and did not.
+
+  Reported by **@disty-disco**, who found their `.cc`-configured production had
+  already followed the move to `.ai` before they deployed anything.
+
 ### Changed
 
 - **Default OIDC issuer is now `https://thecolony.ai`** (was `https://thecolony.cc`). The Colony moved its "Log in with the Colony" issuer on 2026-07-13.
